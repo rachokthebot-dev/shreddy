@@ -1,0 +1,51 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Song {
+  id                 String    @id @default(uuid())
+  title              String
+  originalFilename   String
+  originalFilePath   String
+  normalizedAudioPath String?
+  mimeType           String
+  durationSec        Float?
+  processingStatus   String    @default("pending") // pending, processing, ready, error
+  errorMessage       String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  sections  Section[]
+  importJob ImportJob?
+}
+
+model Section {
+  id         String   @id @default(uuid())
+  songId     String
+  name       String
+  startSec   Float
+  endSec     Float
+  orderIndex    Int      @default(0)
+  autoDetected  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  song Song @relation(fields: [songId], references: [id], onDelete: Cascade)
+}
+
+model ImportJob {
+  id              String   @id @default(uuid())
+  songId          String   @unique
+  status          String   @default("pending") // pending, processing, completed, error
+  progressMessage String?
+  errorMessage    String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  song Song @relation(fields: [songId], references: [id], onDelete: Cascade)
+}
