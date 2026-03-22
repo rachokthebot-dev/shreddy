@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { use } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -139,12 +139,10 @@ export default function PracticePage({
   const [sectionStart, setSectionStart] = useState("");
   const [sectionEnd, setSectionEnd] = useState("");
 
-  // Practice session tracking (M16)
   const [sessionId, setSessionId] = useState<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const [activePlayTime, setActivePlayTime] = useState(0);
 
-  // Metronome (M19)
   const [metronomeEnabled, setMetronomeEnabled] = useState(false);
   const [metronomeVolume, setMetronomeVolume] = useState(0.5);
   const [metronomeStandalone, setMetronomeStandalone] = useState(false);
@@ -158,7 +156,6 @@ export default function PracticePage({
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Bookmark: save position periodically
   const lastSaveRef = useRef(0);
   const settingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -255,21 +252,27 @@ export default function PracticePage({
   }, [song?.processingStatus]);
 
   // Flush section practice logs periodically (every 30s)
+  // Use refs so the interval doesn't get recreated when counts change
+  const loopCountsRef = useRef(loopCounts);
+  const sectionTimesRef = useRef(sectionTimes);
+  loopCountsRef.current = loopCounts;
+  sectionTimesRef.current = sectionTimes;
+
   useEffect(() => {
     if (!sessionId) return;
 
     const flush = () => {
-      const counts = loopCounts;
-      const times = sectionTimes;
-      for (const sectionId of Object.keys(counts)) {
-        if (counts[sectionId] > 0 || (times[sectionId] ?? 0) > 0) {
+      const counts = loopCountsRef.current;
+      const times = sectionTimesRef.current;
+      for (const sId of Object.keys(counts)) {
+        if (counts[sId] > 0 || (times[sId] ?? 0) > 0) {
           fetch(`/api/practice-sessions/${sessionId}/logs`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              sectionId,
-              loopCount: counts[sectionId] ?? 0,
-              durationSec: times[sectionId] ?? 0,
+              sectionId: sId,
+              loopCount: counts[sId] ?? 0,
+              durationSec: times[sId] ?? 0,
             }),
           }).catch(() => {});
         }
@@ -279,9 +282,9 @@ export default function PracticePage({
     flushTimerRef.current = setInterval(flush, 30000);
     return () => {
       if (flushTimerRef.current) clearInterval(flushTimerRef.current);
-      flush(); // Final flush on cleanup
+      flush();
     };
-  }, [sessionId, loopCounts, sectionTimes]);
+  }, [sessionId]);
 
   // Track which section is currently playing and accumulate time
   useEffect(() => {
@@ -312,7 +315,6 @@ export default function PracticePage({
     return () => clearInterval(interval);
   }, [playing, song, currentTime, loopEnabled, selectedSectionIds]);
 
-  // Session elapsed timer — only counts while playing
   useEffect(() => {
     if (!playing) return;
     const timer = setInterval(() => {
@@ -439,8 +441,7 @@ export default function PracticePage({
     return () => clearInterval(interval);
   }, [playing, id]);
 
-  // Compute loop range from selected sections
-  const loopRange = (() => {
+  const loopRange = useMemo(() => {
     if (selectedSectionIds.length === 0 || !song) return null;
     const selected = song.sections.filter((s) => selectedSectionIds.includes(s.id));
     if (selected.length === 0) return null;
@@ -448,10 +449,8 @@ export default function PracticePage({
     const endSec = Math.max(...selected.map((s) => s.endSec));
     const names = selected.sort((a, b) => a.orderIndex - b.orderIndex).map((s) => s.name);
     return { startSec, endSec, names };
-  })();
+  }, [selectedSectionIds, song]);
 
-  // Unified loop enforcement — polls at 60fps for precise looping
-  // Handles section loops, A-B loops, and whole-song looping
   const loopRangeRef = useRef(loopRange);
   const abLoopRef = useRef(abLoop);
   const loopEnabledRef = useRef(loopEnabled);
@@ -461,8 +460,10 @@ export default function PracticePage({
   loopEnabledRef.current = loopEnabled;
   loopSongRef.current = loopSong;
 
+  // Loop enforcement via rAF — only active when a loop mode is on
+  const hasAnyLoop = loopSong || (loopEnabled && !!loopRange) || !!abLoop;
   useEffect(() => {
-    if (!playing) return;
+    if (!playing || !hasAnyLoop) return;
     let rafId: number;
 
     const check = () => {
@@ -494,9 +495,8 @@ export default function PracticePage({
 
     rafId = requestAnimationFrame(check);
     return () => cancelAnimationFrame(rafId);
-  }, [playing]);
+  }, [playing, hasAnyLoop]);
 
-  // Handle tempo changes
   useEffect(() => {
     if (audioRef.current) {
       audioRef.current.playbackRate = tempo;
