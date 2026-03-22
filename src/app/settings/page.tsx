@@ -41,6 +41,7 @@ Begin your analysis:`;
 
 export default function SettingsPage() {
   const [prompt, setPrompt] = useState("");
+  const [youtubeMaxDuration, setYoutubeMaxDuration] = useState(10); // minutes
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
@@ -53,6 +54,7 @@ export default function SettingsPage() {
       .then((res) => res.json())
       .then((data) => {
         setPrompt(data.analysisPrompt || "");
+        setYoutubeMaxDuration(Math.floor((data.youtubeMaxDuration || 600) / 60));
         setLoading(false);
       });
   }, []);
@@ -68,7 +70,10 @@ export default function SettingsPage() {
     await fetch("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ analysisPrompt: prompt }),
+      body: JSON.stringify({
+        analysisPrompt: prompt,
+        youtubeMaxDuration: youtubeMaxDuration * 60,
+      }),
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -116,6 +121,27 @@ export default function SettingsPage() {
               className={`absolute top-0.5 size-5 rounded-full bg-white shadow-sm transition-transform ${darkMode ? "translate-x-5.5" : "translate-x-0.5"}`}
             />
           </button>
+        </div>
+
+        {/* YouTube import settings */}
+        <div className="p-4 bg-card rounded-xl border border-border">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-foreground">YouTube Max Duration</p>
+              <p className="text-xs text-muted-foreground">Maximum video length for YouTube imports</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                max={60}
+                value={youtubeMaxDuration}
+                onChange={(e) => setYoutubeMaxDuration(parseInt(e.target.value) || 10)}
+                className="w-16 h-9 px-2 text-sm text-center border border-border rounded-lg bg-background text-foreground"
+              />
+              <span className="text-sm text-muted-foreground">min</span>
+            </div>
+          </div>
         </div>
 
         {/* Analysis prompt */}

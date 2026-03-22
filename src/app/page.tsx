@@ -23,6 +23,9 @@ import {
   Music,
   Loader2,
   FolderInput,
+  BarChart3,
+  Link2,
+  Copy,
 } from "lucide-react";
 
 interface Folder {
@@ -111,6 +114,12 @@ export default function LibraryPage() {
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
   const [movingSongId, setMovingSongId] = useState<string | null>(null);
 
+  // YouTube import
+  const [youtubeDialogOpen, setYoutubeDialogOpen] = useState(false);
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [youtubeImporting, setYoutubeImporting] = useState(false);
+  const [youtubeError, setYoutubeError] = useState<string | null>(null);
+
   const fetchSongs = useCallback(async () => {
     try {
       const res = await fetch("/api/songs");
@@ -187,6 +196,36 @@ export default function LibraryPage() {
       setUploadProgress(0);
       e.target.value = "";
     }
+  }
+
+  async function handleYoutubeImport() {
+    if (!youtubeUrl.trim()) return;
+    setYoutubeImporting(true);
+    setYoutubeError(null);
+    try {
+      const res = await fetch("/api/import/youtube", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: youtubeUrl.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setYoutubeError(data.error || "Import failed");
+        return;
+      }
+      setYoutubeDialogOpen(false);
+      setYoutubeUrl("");
+      await fetchSongs();
+    } catch {
+      setYoutubeError("Import failed. Check the URL and try again.");
+    } finally {
+      setYoutubeImporting(false);
+    }
+  }
+
+  async function handleDuplicate(id: string) {
+    await fetch(`/api/songs/${id}/duplicate`, { method: "POST" });
+    await fetchSongs();
   }
 
   async function handleDelete(id: string, title: string) {
@@ -316,6 +355,15 @@ export default function LibraryPage() {
         </div>
         <div className="flex items-center gap-0.5 shrink-0">
           {statusBadge(song.processingStatus)}
+          {song.processingStatus === "ready" && (
+            <button
+              onClick={() => handleDuplicate(song.id)}
+              className="p-2.5 rounded-lg text-muted-foreground/50 hover:text-foreground hover:bg-muted active:scale-90 transition-all"
+              title="Duplicate"
+            >
+              <Copy className="size-4" />
+            </button>
+          )}
           <button
             onClick={() => { setMovingSongId(song.id); setMoveDialogOpen(true); }}
             className="p-2.5 rounded-lg text-muted-foreground/50 hover:text-foreground hover:bg-muted active:scale-90 transition-all"
@@ -342,12 +390,27 @@ export default function LibraryPage() {
         <h1 className="text-2xl font-semibold tracking-tight text-foreground">PracticePad</h1>
         <div className="flex items-center gap-1.5">
           <Link
+            href="/stats"
+            className="p-2.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted active:scale-90 transition-all"
+            title="Practice Stats"
+          >
+            <BarChart3 className="size-5" />
+          </Link>
+          <Link
             href="/settings"
             className="p-2.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted active:scale-90 transition-all"
             title="Settings"
           >
             <Settings className="size-5" />
           </Link>
+          <Button
+            variant="outline"
+            onClick={() => { setYoutubeDialogOpen(true); setYoutubeError(null); setYoutubeUrl(""); }}
+            className="gap-1.5 h-9 px-3"
+          >
+            <Link2 className="size-4" />
+            URL
+          </Button>
           <Button
             disabled={uploading}
             onClick={() => document.getElementById("file-upload")?.click()}
@@ -577,6 +640,48 @@ export default function LibraryPage() {
                 {folder.name}
               </button>
             ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* YouTube import dialog */}
+      <Dialog open={youtubeDialogOpen} onOpenChange={setYoutubeDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Import from YouTube</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div>
+              <Input
+                value={youtubeUrl}
+                onChange={(e) => { setYoutubeUrl(e.target.value); setYoutubeError(null); }}
+                placeholder="Paste YouTube URL..."
+                onKeyDown={(e) => e.key === "Enter" && handleYoutubeImport()}
+                autoFocus
+                className="h-10"
+              />
+              <p className="text-[11px] text-muted-foreground mt-1.5">
+                For personal practice use only. Max 10 min.
+              </p>
+            </div>
+            {youtubeError && (
+              <p className="text-sm text-destructive">{youtubeError}</p>
+            )}
+            <div className="flex gap-2 justify-end">
+              <Button variant="outline" onClick={() => setYoutubeDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleYoutubeImport} disabled={youtubeImporting || !youtubeUrl.trim()}>
+                {youtubeImporting ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin mr-1.5" />
+                    Importing...
+                  </>
+                ) : (
+                  "Import"
+                )}
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

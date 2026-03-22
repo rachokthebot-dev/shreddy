@@ -29,7 +29,14 @@ import {
   StickyNote,
   ChevronDown,
   ChevronUp,
+  Star,
+  Clock,
+  RotateCw,
+  Disc3,
+  Volume2,
+  RefreshCw,
 } from "lucide-react";
+import { useMetronome } from "@/hooks/useMetronome";
 
 interface Section {
   id: string;
@@ -38,6 +45,7 @@ interface Section {
   endSec: number;
   orderIndex: number;
   autoDetected: boolean;
+  masteryRating: number | null;
 }
 
 interface Song {
@@ -47,8 +55,12 @@ interface Song {
   durationSec: number | null;
   processingStatus: string;
   bpm: number | null;
+  beatTimestamps: string | null;
   notes: string;
   lastPositionSec: number;
+  lastTempo: number | null;
+  lastPitch: number | null;
+  lastSelectedSections: string | null;
   artist: string;
   album: string;
   genre: string;
@@ -102,6 +114,7 @@ export default function PracticePage({
   const [selectedSectionIds, setSelectedSectionIds] = useState<string[]>([]);
   const [loopEnabled, setLoopEnabled] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [settingsRestored, setSettingsRestored] = useState(false);
 
   // Title editing
   const [editingTitle, setEditingTitle] = useState(false);
@@ -124,6 +137,23 @@ export default function PracticePage({
   const [sectionStart, setSectionStart] = useState("");
   const [sectionEnd, setSectionEnd] = useState("");
 
+  // Practice session tracking (M16)
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionStartTime, setSessionStartTime] = useState<number>(Date.now());
+  const [displayElapsed, setDisplayElapsed] = useState(0);
+
+  // Metronome (M19)
+  const [metronomeEnabled, setMetronomeEnabled] = useState(false);
+  const [metronomeVolume, setMetronomeVolume] = useState(0.5);
+  const [metronomeStandalone, setMetronomeStandalone] = useState(false);
+  const currentTimeRef = useRef(0);
+
+  const [loopCounts, setLoopCounts] = useState<Record<string, number>>({});
+  const [sectionTimes, setSectionTimes] = useState<Record<string, number>>({});
+  const lastSectionRef = useRef<string | null>(null);
+  const sectionEnteredAtRef = useRef<number>(Date.now());
+  const flushTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
@@ -131,6 +161,7 @@ export default function PracticePage({
 
   // Bookmark: save position periodically
   const lastSaveRef = useRef(0);
+  const settingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchSong = useCallback(async () => {
     try {
@@ -148,6 +179,197 @@ export default function PracticePage({
   useEffect(() => {
     fetchSong();
   }, [fetchSong]);
+
+  // Restore last practice settings when song loads
+  useEffect(() => {
+    if (!song || settingsRestored) return;
+    if (song.lastTempo !== null) setTempo(song.lastTempo);
+    if (song.lastPitch !== null) setPitch(song.lastPitch);
+    if (song.lastSelectedSections) {
+      try {
+        const ids = JSON.parse(song.lastSelectedSections) as string[];
+        if (ids.length > 0) {
+          const validIds = ids.filter(sid => song.sections.some(s => s.id === sid));
+          if (validIds.length > 0) {
+            setSelectedSectionIds(validIds);
+            setLoopEnabled(true);
+          }
+        }
+      } catch { /* ignore invalid JSON */ }
+    }
+    setSettingsRestored(true);
+  }, [song, settingsRestored]);
+
+  // Save practice settings on change (debounced)
+  const savePracticeSettings = useCallback((t: number, p: number, sIds: string[]) => {
+    if (settingsSaveTimerRef.current) clearTimeout(settingsSaveTimerRef.current);
+    settingsSaveTimerRef.current = setTimeout(() => {
+      fetch(`/api/songs/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lastTempo: t,
+          lastPitch: p,
+          lastSelectedSections: JSON.stringify(sIds),
+        }),
+      }).catch(() => {});
+    }, 1000);
+  }, [id]);
+
+  useEffect(() => {
+    if (!settingsRestored) return;
+    savePracticeSettings(tempo, pitch, selectedSectionIds);
+  }, [tempo, pitch, selectedSectionIds, settingsRestored, savePracticeSettings]);
+
+  // Start practice session on mount, end on unmount
+  useEffect(() => {
+    if (!song || song.processingStatus !== "ready") return;
+    const startTime = Date.now();
+    setSessionStartTime(startTime);
+
+    fetch("/api/practice-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ songId: id, tempo, pitch }),
+    })
+      .then(res => res.json())
+      .then(data => setSessionId(data.id))
+      .catch(() => {});
+
+    return () => {
+      const durationSec = (Date.now() - startTime) / 1000;
+      // Use sendBeacon for reliable delivery on page unload
+      const endData = JSON.stringify({
+        endedAt: new Date().toISOString(),
+        durationSec,
+      });
+      // sessionId might not be set yet, so we use a closure trick
+      // The actual flush happens via the flushTimerRef cleanup
+      navigator.sendBeacon?.(`/api/practice-sessions/${sessionId}`, new Blob([endData], { type: "application/json" }));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [song?.processingStatus]);
+
+  // Flush section practice logs periodically (every 30s)
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const flush = () => {
+      const counts = loopCounts;
+      const times = sectionTimes;
+      for (const sectionId of Object.keys(counts)) {
+        if (counts[sectionId] > 0 || (times[sectionId] ?? 0) > 0) {
+          fetch(`/api/practice-sessions/${sessionId}/logs`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sectionId,
+              loopCount: counts[sectionId] ?? 0,
+              durationSec: times[sectionId] ?? 0,
+            }),
+          }).catch(() => {});
+        }
+      }
+    };
+
+    flushTimerRef.current = setInterval(flush, 30000);
+    return () => {
+      if (flushTimerRef.current) clearInterval(flushTimerRef.current);
+      flush(); // Final flush on cleanup
+    };
+  }, [sessionId, loopCounts, sectionTimes]);
+
+  // Track which section is currently playing and accumulate time
+  useEffect(() => {
+    if (!playing || !song) return;
+    const interval = setInterval(() => {
+      const cs = song.sections.find(
+        s => currentTime >= s.startSec && currentTime < s.endSec
+      );
+      if (cs) {
+        if (lastSectionRef.current !== cs.id) {
+          // Section changed — if we had a previous section and loop is active, count a loop
+          if (lastSectionRef.current && loopEnabled && selectedSectionIds.includes(lastSectionRef.current)) {
+            setLoopCounts(prev => ({
+              ...prev,
+              [lastSectionRef.current!]: (prev[lastSectionRef.current!] ?? 0) + 1,
+            }));
+          }
+          lastSectionRef.current = cs.id;
+          sectionEnteredAtRef.current = Date.now();
+        }
+        // Accumulate time in current section
+        setSectionTimes(prev => ({
+          ...prev,
+          [cs.id]: (prev[cs.id] ?? 0) + 1,
+        }));
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [playing, song, currentTime, loopEnabled, selectedSectionIds]);
+
+  // Session elapsed timer
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setDisplayElapsed(Math.floor((Date.now() - sessionStartTime) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [sessionStartTime]);
+
+  // Keep currentTimeRef in sync for metronome (avoids re-renders)
+  currentTimeRef.current = currentTime;
+
+  // Metronome
+  const parsedBeats: number[] = (() => {
+    if (!song?.beatTimestamps) return [];
+    try { return JSON.parse(song.beatTimestamps); } catch { return []; }
+  })();
+
+  const { isActive: metronomeActive, currentBeat, tapSync, doCountIn, handleTapTempo, manualBpm, resetManualBpm } = useMetronome({
+    bpm: (song?.bpm ?? 0) * tempo,
+    enabled: metronomeEnabled,
+    volume: metronomeVolume,
+    playing,
+    currentTimeRef,
+    beatTimestamps: parsedBeats,
+    tempo,
+    standalone: metronomeStandalone,
+  });
+
+  const baseBpm = manualBpm ?? song?.bpm ?? 0;
+  const effectiveBpm = baseBpm * tempo;
+
+  // Count-in then play
+  async function handleCountInPlay() {
+    if (!audioRef.current || playing) return;
+    setMetronomeEnabled(true);
+    await doCountIn();
+    audioRef.current.play();
+    setPlaying(true);
+  }
+
+  // Re-analyze
+  const [reanalyzing, setReanalyzing] = useState(false);
+  async function handleReanalyze() {
+    if (reanalyzing) return;
+    setReanalyzing(true);
+    try {
+      await fetch(`/api/songs/${id}/reanalyze`, { method: "POST" });
+      // Poll until processing is done
+      const poll = setInterval(async () => {
+        const res = await fetch(`/api/songs/${id}`);
+        const data = await res.json();
+        if (data.processingStatus === "ready") {
+          clearInterval(poll);
+          setSong(data);
+          setNotesDraft(data.notes || "");
+          setReanalyzing(false);
+        }
+      }, 2000);
+    } catch {
+      setReanalyzing(false);
+    }
+  }
 
   // Set up audio element
   useEffect(() => {
@@ -324,6 +546,7 @@ export default function PracticePage({
     }
 
     if (extend && selectedSectionIds.length > 0 && song) {
+      // Shift+click: range selection (desktop)
       const allIds = song.sections.map((s) => s.id);
       const firstSelectedIdx = allIds.indexOf(selectedSectionIds[0]);
       const clickedIdx = allIds.indexOf(section.id);
@@ -331,10 +554,19 @@ export default function PracticePage({
       const end = Math.max(firstSelectedIdx, clickedIdx);
       const rangeIds = allIds.slice(start, end + 1);
       setSelectedSectionIds(rangeIds);
-    } else if (selectedSectionIds.includes(section.id) && selectedSectionIds.length === 1) {
-      clearLoop();
-      return;
+    } else if (selectedSectionIds.includes(section.id)) {
+      // Tap-to-toggle: deselect if already selected
+      const remaining = selectedSectionIds.filter(sid => sid !== section.id);
+      if (remaining.length === 0) {
+        clearLoop();
+        return;
+      }
+      setSelectedSectionIds(remaining);
+    } else if (selectedSectionIds.length > 0) {
+      // Tap-to-toggle: add to selection (touch-friendly multi-select)
+      setSelectedSectionIds([...selectedSectionIds, section.id]);
     } else {
+      // First selection
       setSelectedSectionIds([section.id]);
     }
     setLoopEnabled(true);
@@ -463,6 +695,26 @@ export default function PracticePage({
 
   function setEndToCurrent() {
     setSectionEnd(formatTime(currentTime));
+  }
+
+  // Mastery rating
+  async function setMasteryRating(sectionId: string, rating: number) {
+    const currentRating = song?.sections.find(s => s.id === sectionId)?.masteryRating;
+    const newRating = currentRating === rating ? null : rating; // Toggle off if same
+    await fetch(`/api/sections/${sectionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ masteryRating: newRating }),
+    });
+    await fetchSong();
+  }
+
+  // Format practice time
+  function formatPracticeTime(sec: number): string {
+    if (sec < 60) return `${sec}s`;
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return s > 0 ? `${m}m ${s}s` : `${m}m`;
   }
 
   if (!song && !loadError) {
@@ -604,6 +856,15 @@ export default function PracticePage({
               {song.durationSec && (
                 <span className="text-[11px] bg-muted text-muted-foreground px-2 py-0.5 rounded-full">{formatTime(song.durationSec)}</span>
               )}
+              <button
+                onClick={handleReanalyze}
+                disabled={reanalyzing}
+                className="text-[11px] bg-muted text-muted-foreground px-2 py-0.5 rounded-full hover:bg-accent transition-colors flex items-center gap-1"
+                title="Re-analyze sections and BPM"
+              >
+                <RefreshCw className={`size-3 ${reanalyzing ? "animate-spin" : ""}`} />
+                {reanalyzing ? "Analyzing..." : "Re-analyze"}
+              </button>
             </div>
           </div>
         </div>
@@ -824,6 +1085,128 @@ export default function PracticePage({
             </div>
           </div>
 
+          {/* Metronome */}
+          <div className="bg-card border border-border rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Disc3 className={`size-4 ${metronomeActive ? "animate-spin text-primary" : "text-muted-foreground"}`} />
+                <Label className="text-sm font-semibold text-foreground">
+                  Metronome
+                </Label>
+                {metronomeEnabled && baseBpm > 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    {Math.round(effectiveBpm)} BPM
+                    {manualBpm && <span className="text-[10px] ml-1">(tap)</span>}
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={() => setMetronomeEnabled(!metronomeEnabled)}
+                className={`relative w-11 h-6 rounded-full transition-colors ${metronomeEnabled ? "bg-primary" : "bg-muted"}`}
+              >
+                <div
+                  className={`absolute top-0.5 size-5 rounded-full bg-white shadow-sm transition-transform ${metronomeEnabled ? "translate-x-5.5" : "translate-x-0.5"}`}
+                />
+              </button>
+            </div>
+            {metronomeEnabled && (
+              <div className="space-y-3">
+                {/* Beat indicator */}
+                <div className="flex items-center justify-center gap-2">
+                  {[0, 1, 2, 3].map(i => (
+                    <div
+                      key={i}
+                      className={`size-3 rounded-full transition-all ${
+                        metronomeActive && currentBeat === i
+                          ? i === 0 ? "bg-primary scale-125" : "bg-primary/70 scale-110"
+                          : "bg-muted"
+                      }`}
+                    />
+                  ))}
+                </div>
+
+                {/* Volume */}
+                <div className="flex items-center gap-3">
+                  <Volume2 className="size-4 text-muted-foreground shrink-0" />
+                  <Slider
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={[metronomeVolume]}
+                    onValueChange={(v) => setMetronomeVolume(Array.isArray(v) ? v[0] : v)}
+                    className="flex-1"
+                  />
+                </div>
+
+                {/* Controls row */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {/* Tap tempo */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-8 gap-1"
+                    onClick={handleTapTempo}
+                  >
+                    Tap BPM
+                  </Button>
+
+                  {/* Tap sync */}
+                  {parsedBeats.length === 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-xs h-8 gap-1"
+                      onClick={tapSync}
+                    >
+                      Sync
+                    </Button>
+                  )}
+
+                  {/* Count-in play */}
+                  {!playing && baseBpm > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-xs h-8 gap-1"
+                      onClick={handleCountInPlay}
+                    >
+                      <Play className="size-3" />
+                      Count-in
+                    </Button>
+                  )}
+
+                  {/* Standalone toggle */}
+                  <Button
+                    variant={metronomeStandalone ? "secondary" : "outline"}
+                    size="sm"
+                    className="text-xs h-8"
+                    onClick={() => setMetronomeStandalone(!metronomeStandalone)}
+                  >
+                    Solo
+                  </Button>
+
+                  {/* Reset manual BPM */}
+                  {manualBpm && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-xs h-8"
+                      onClick={resetManualBpm}
+                    >
+                      Reset BPM
+                    </Button>
+                  )}
+                </div>
+
+                {parsedBeats.length > 0 && (
+                  <p className="text-[10px] text-muted-foreground/50">
+                    Synced to {parsedBeats.length} detected beats
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Notes */}
           <div className="bg-card border border-border rounded-xl p-4">
             <button
@@ -857,7 +1240,15 @@ export default function PracticePage({
         {/* Right column: Sections */}
         <div className="bg-card border border-border rounded-xl p-4">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-foreground">Sections</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-foreground">Sections</h2>
+              {displayElapsed > 0 && (
+                <span className="text-[11px] text-muted-foreground flex items-center gap-1">
+                  <Clock className="size-3" />
+                  {formatPracticeTime(displayElapsed)}
+                </span>
+              )}
+            </div>
             <Button variant="outline" size="sm" onClick={openNewSection} className="gap-1 h-9">
               <Plus className="size-3.5" />
               Add
@@ -900,10 +1291,36 @@ export default function PracticePage({
                             Auto
                           </Badge>
                         )}
+                        {(loopCounts[section.id] ?? 0) > 0 && (
+                          <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                            <RotateCw className="size-2.5" />
+                            {loopCounts[section.id]}
+                          </span>
+                        )}
                       </span>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {formatTime(section.startSec)} – {formatTime(section.endSec)}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          {formatTime(section.startSec)} – {formatTime(section.endSec)}
+                        </span>
+                        {/* Mastery stars */}
+                        <span className="flex items-center gap-px" onClick={(e) => e.stopPropagation()}>
+                          {[1, 2, 3, 4, 5].map(star => (
+                            <button
+                              key={star}
+                              onClick={(e) => { e.stopPropagation(); setMasteryRating(section.id, star); }}
+                              className="p-0 active:scale-90 transition-transform"
+                            >
+                              <Star
+                                className={`size-3 ${
+                                  section.masteryRating && star <= section.masteryRating
+                                    ? "text-yellow-400 fill-yellow-400"
+                                    : "text-muted-foreground/30"
+                                }`}
+                              />
+                            </button>
+                          ))}
+                        </span>
+                      </div>
                     </div>
                     <button
                       onClick={(e) => { e.stopPropagation(); openEditSection(section); }}
@@ -924,7 +1341,7 @@ export default function PracticePage({
           )}
 
           <p className="text-[11px] text-muted-foreground/50 mt-3 px-1">
-            Tap to loop · Shift+tap for range
+            Tap to select · Tap again to add/remove
           </p>
         </div>
       </div>

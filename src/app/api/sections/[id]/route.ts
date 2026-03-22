@@ -14,6 +14,7 @@ export async function PATCH(
       ...(body.startSec !== undefined && { startSec: body.startSec }),
       ...(body.endSec !== undefined && { endSec: body.endSec }),
       ...(body.orderIndex !== undefined && { orderIndex: body.orderIndex }),
+      ...(body.masteryRating !== undefined && { masteryRating: body.masteryRating }),
     },
   });
   return NextResponse.json(section);

@@ -1,5 +1,6 @@
 import { execFile } from "child_process";
 import path from "path";
+import { unlink } from "fs/promises";
 import { AUDIO_DIR } from "./paths";
 import { prisma } from "./prisma";
 
@@ -16,6 +17,7 @@ interface AnalyzedSection {
 interface AnalysisResult {
   sections: AnalyzedSection[];
   bpm: number | null;
+  beats: number[];
 }
 
 async function extractMetadata(filePath: string): Promise<Record<string, string>> {
@@ -77,24 +79,28 @@ async function analyzeAudio(audioPath: string, songTitle: string, originalFilena
       (error, stdout, stderr) => {
         if (error) {
           console.error("Analysis failed:", stderr || error.message);
-          resolve({ sections: [], bpm: null });
+          resolve({ sections: [], bpm: null, beats: [] });
           return;
         }
         try {
           const result = JSON.parse(stdout.trim());
           if (result && typeof result === "object" && Array.isArray(result.sections)) {
-            // New format: { bpm, sections }
-            resolve({ sections: result.sections, bpm: result.bpm ?? null });
+            // New format: { bpm, sections, beats }
+            resolve({
+              sections: result.sections,
+              bpm: result.bpm ?? null,
+              beats: Array.isArray(result.beats) ? result.beats : [],
+            });
           } else if (Array.isArray(result)) {
             // Legacy format: just sections array
-            resolve({ sections: result, bpm: null });
+            resolve({ sections: result, bpm: null, beats: [] });
           } else {
             console.error("Analysis returned error:", result);
-            resolve({ sections: [], bpm: null });
+            resolve({ sections: [], bpm: null, beats: [] });
           }
         } catch {
           console.error("Failed to parse analysis output:", stdout);
-          resolve({ sections: [], bpm: null });
+          resolve({ sections: [], bpm: null, beats: [] });
         }
       }
     );
@@ -187,11 +193,14 @@ export async function processAudio(songId: string, inputPath: string) {
     const song = await prisma.song.findUnique({ where: { id: songId } });
     const analysis = await analyzeAudio(outputPath, song?.title || "", song?.originalFilename || "");
 
-    // Save BPM
-    if (analysis.bpm) {
+    // Save BPM and beat timestamps
+    if (analysis.bpm || analysis.beats.length > 0) {
       await prisma.song.update({
         where: { id: songId },
-        data: { bpm: analysis.bpm },
+        data: {
+          ...(analysis.bpm && { bpm: analysis.bpm }),
+          ...(analysis.beats.length > 0 && { beatTimestamps: JSON.stringify(analysis.beats) }),
+        },
       });
     }
 
@@ -223,6 +232,13 @@ export async function processAudio(songId: string, inputPath: string) {
       where: { songId },
       data: { status: "completed", progressMessage: "Done" },
     });
+
+    // Clean up original upload file (normalized version is what we use)
+    try {
+      await unlink(inputPath);
+    } catch {
+      // Not critical if cleanup fails
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     await prisma.song.update({
@@ -232,6 +248,64 @@ export async function processAudio(songId: string, inputPath: string) {
     await prisma.importJob.update({
       where: { songId },
       data: { status: "error", errorMessage: message },
+    });
+  }
+}
+
+export async function reanalyzeAudio(songId: string, audioPath: string) {
+  try {
+    await prisma.song.update({
+      where: { id: songId },
+      data: { processingStatus: "processing" },
+    });
+
+    const song = await prisma.song.findUnique({ where: { id: songId } });
+    const analysis = await analyzeAudio(audioPath, song?.title || "", song?.originalFilename || "");
+
+    // Update BPM and beat timestamps
+    await prisma.song.update({
+      where: { id: songId },
+      data: {
+        ...(analysis.bpm && { bpm: analysis.bpm }),
+        beatTimestamps: analysis.beats.length > 0 ? JSON.stringify(analysis.beats) : null,
+      },
+    });
+
+    // Delete old auto-detected sections (keep manually created ones)
+    await prisma.section.deleteMany({
+      where: { songId, autoDetected: true },
+    });
+
+    // Save new auto-detected sections
+    if (analysis.sections.length > 0) {
+      // Get max orderIndex of remaining manual sections
+      const maxOrder = await prisma.section.aggregate({
+        where: { songId },
+        _max: { orderIndex: true },
+      });
+      const startIndex = (maxOrder._max.orderIndex ?? -1) + 1;
+
+      await prisma.section.createMany({
+        data: analysis.sections.map((s, i) => ({
+          songId,
+          name: s.name,
+          startSec: s.startSec,
+          endSec: s.endSec,
+          orderIndex: startIndex + i,
+          autoDetected: true,
+        })),
+      });
+    }
+
+    await prisma.song.update({
+      where: { id: songId },
+      data: { processingStatus: "ready" },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Re-analysis failed";
+    await prisma.song.update({
+      where: { id: songId },
+      data: { processingStatus: "ready", errorMessage: message },
     });
   }
 }

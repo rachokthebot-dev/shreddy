@@ -33,6 +33,9 @@ export async function PATCH(
       ...(body.folderId !== undefined && { folderId: body.folderId || null }),
       ...(body.notes !== undefined && { notes: body.notes }),
       ...(body.lastPositionSec !== undefined && { lastPositionSec: body.lastPositionSec }),
+      ...(body.lastTempo !== undefined && { lastTempo: body.lastTempo }),
+      ...(body.lastPitch !== undefined && { lastPitch: body.lastPitch }),
+      ...(body.lastSelectedSections !== undefined && { lastSelectedSections: body.lastSelectedSections }),
     },
   });
   return NextResponse.json(song);

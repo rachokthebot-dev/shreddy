@@ -5,6 +5,7 @@ import { SETTINGS_FILE } from "@/lib/paths";
 
 interface Settings {
   analysisPrompt?: string;
+  youtubeMaxDuration?: number; // seconds, default 600 (10 min)
 }
 
 async function readSettings(): Promise<Settings> {
