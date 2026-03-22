@@ -146,7 +146,6 @@ export default function PracticePage({
   const [metronomeEnabled, setMetronomeEnabled] = useState(false);
   const [metronomeVolume, setMetronomeVolume] = useState(0.5);
   const [metronomeStandalone, setMetronomeStandalone] = useState(false);
-  const currentTimeRef = useRef(0);
 
   const [loopCounts, setLoopCounts] = useState<Record<string, number>>({});
   const [sectionTimes, setSectionTimes] = useState<Record<string, number>>({});
@@ -316,9 +315,6 @@ export default function PracticePage({
     return () => clearInterval(timer);
   }, [sessionStartTime]);
 
-  // Keep currentTimeRef in sync for metronome (avoids re-renders)
-  currentTimeRef.current = currentTime;
-
   // Metronome
   const parsedBeats: number[] = (() => {
     if (!song?.beatTimestamps) return [];
@@ -330,7 +326,7 @@ export default function PracticePage({
     enabled: metronomeEnabled,
     volume: metronomeVolume,
     playing,
-    currentTimeRef,
+    audioRef,
     beatTimestamps: parsedBeats,
     tempo,
     standalone: metronomeStandalone,

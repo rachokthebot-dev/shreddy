@@ -5,21 +5,21 @@ interface MetronomeOptions {
   enabled: boolean;
   volume: number;             // 0-1
   playing: boolean;           // whether the song is playing
-  currentTimeRef: React.RefObject<number>; // ref to current playback time (avoids re-renders)
+  audioRef: React.RefObject<HTMLAudioElement | null>; // ref to audio element for precise time reads
   beatTimestamps?: number[];  // librosa-detected beat times (at 1x tempo)
   tempo: number;              // tempo multiplier
   standalone: boolean;        // standalone mode (no song playing)
 }
 
-const SCHEDULE_AHEAD = 0.1;   // seconds to look ahead
-const TICK_INTERVAL = 25;      // ms between scheduler runs
+const SCHEDULE_AHEAD = 0.15;  // seconds to look ahead
+const TICK_INTERVAL = 20;      // ms between scheduler runs
 
 export function useMetronome({
   bpm,
   enabled,
   volume,
   playing,
-  currentTimeRef,
+  audioRef,
   beatTimestamps,
   tempo,
   standalone,
@@ -121,21 +121,43 @@ export function useMetronome({
       const hasSyncedBeats = beats && beats.length > 0 && !standalone;
 
       if (hasSyncedBeats) {
-        // Beat-synced mode: schedule clicks at detected beat positions
-        const songTime = currentTimeRef.current ?? 0;
+        // Beat-synced mode: read audio time directly for precision
+        const audio = audioRef.current;
+        if (!audio) return;
+        const songTime = audio.currentTime;
         const currentTempo = tempoRef.current;
 
-        for (let i = 0; i < beats.length; i++) {
-          const beatTime = beats[i] / currentTempo; // adjust for tempo
+        // Find next unscheduled beat using binary search from current position
+        let startIdx = lastScheduledBeatRef.current + 1;
+        // If we seeked backwards, reset
+        if (startIdx > 0 && startIdx < beats.length) {
+          const prevBeatTime = beats[startIdx - 1] / currentTempo;
+          if (songTime < prevBeatTime - 1) {
+            // Seeked backwards — find new position
+            startIdx = 0;
+            lastScheduledBeatRef.current = -1;
+          }
+        }
+
+        for (let i = startIdx; i < beats.length; i++) {
+          const beatTime = beats[i] / currentTempo;
           const delta = beatTime - songTime;
 
-          if (delta >= -0.03 && delta < SCHEDULE_AHEAD && i !== lastScheduledBeatRef.current) {
-            const isDownbeat = i % 4 === 0;
-            const scheduleAt = ctx.currentTime + Math.max(0, delta);
-            scheduleClick(scheduleAt, isDownbeat);
-            setCurrentBeat(i % 4);
+          // Too far ahead — stop scanning
+          if (delta >= SCHEDULE_AHEAD) break;
+
+          // Skip beats that are already past
+          if (delta < -0.05) {
             lastScheduledBeatRef.current = i;
+            continue;
           }
+
+          // Schedule this beat
+          const isDownbeat = i % 4 === 0;
+          const scheduleAt = ctx.currentTime + Math.max(0, delta);
+          scheduleClick(scheduleAt, isDownbeat);
+          setCurrentBeat(i % 4);
+          lastScheduledBeatRef.current = i;
         }
       } else {
         // Free-running mode
@@ -154,7 +176,7 @@ export function useMetronome({
     // Run immediately then on interval
     scheduler();
     timerRef.current = setInterval(scheduler, TICK_INTERVAL);
-  }, [scheduleClick, currentTimeRef, standalone]);
+  }, [scheduleClick, audioRef, standalone]);
 
   // Tap to sync — reset beat grid to current moment
   const tapSync = useCallback(() => {
