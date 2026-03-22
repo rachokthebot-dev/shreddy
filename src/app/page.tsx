@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -109,6 +110,7 @@ const SORT_OPTIONS: { value: SortMode; label: string; icon: React.ReactNode }[] 
 ];
 
 export default function LibraryPage() {
+  const router = useRouter();
   const [songs, setSongs] = useState<Song[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
@@ -344,11 +346,12 @@ export default function LibraryPage() {
     return (
       <li
         key={song.id}
-        className="group flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-muted/50 active:scale-[0.99] transition-all"
+        className="group flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-muted/50 active:scale-[0.99] transition-all cursor-pointer"
+        onClick={() => song.processingStatus === "ready" && router.push(`/songs/${song.id}`)}
       >
         {/* Pin button */}
         <button
-          onClick={() => handleTogglePin(song.id, song.pinned)}
+          onClick={(e) => { e.stopPropagation(); handleTogglePin(song.id, song.pinned); }}
           className={`shrink-0 p-1.5 -m-1 rounded-full active:scale-90 transition-transform ${
             song.pinned ? "text-amber-500" : "text-muted-foreground/30 hover:text-amber-400"
           }`}
@@ -405,7 +408,7 @@ export default function LibraryPage() {
         <div className="flex items-center gap-0 shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
           {song.processingStatus === "ready" && (
             <button
-              onClick={() => handleDuplicate(song.id)}
+              onClick={(e) => { e.stopPropagation(); handleDuplicate(song.id); }}
               className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted active:scale-90 transition-all"
               title="Duplicate"
             >
@@ -413,14 +416,14 @@ export default function LibraryPage() {
             </button>
           )}
           <button
-            onClick={() => { setMovingSongId(song.id); setMoveDialogOpen(true); }}
+            onClick={(e) => { e.stopPropagation(); setMovingSongId(song.id); setMoveDialogOpen(true); }}
             className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted active:scale-90 transition-all"
             title="Move to folder"
           >
             <FolderInput className="size-3.5" />
           </button>
           <button
-            onClick={() => handleDelete(song.id, song.title)}
+            onClick={(e) => { e.stopPropagation(); handleDelete(song.id, song.title); }}
             className="p-2 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 active:scale-90 transition-all"
             title="Delete"
           >
