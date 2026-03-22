@@ -3,8 +3,8 @@ import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   const songs = await prisma.song.findMany({
-    orderBy: { createdAt: "desc" },
-    include: { importJob: true },
+    orderBy: [{ pinned: "desc" }, { createdAt: "desc" }],
+    include: { importJob: true, folder: true },
   });
   return NextResponse.json(songs);
 }

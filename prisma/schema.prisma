@@ -17,11 +17,31 @@ model Song {
   durationSec        Float?
   processingStatus   String    @default("pending") // pending, processing, ready, error
   errorMessage       String?
+  pinned             Boolean   @default(false)
+  folderId           String?
+  bpm                Float?
+  notes              String    @default("")
+  lastPositionSec    Float     @default(0)
+  artist             String    @default("")
+  album              String    @default("")
+  genre              String    @default("")
+  year               String    @default("")
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
   sections  Section[]
   importJob ImportJob?
+  folder    Folder?   @relation(fields: [folderId], references: [id], onDelete: SetNull)
+}
+
+model Folder {
+  id         String   @id @default(uuid())
+  name       String
+  orderIndex Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  songs Song[]
 }
 
 model Section {

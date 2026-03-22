@@ -27,7 +27,13 @@ export async function PATCH(
   const body = await request.json();
   const song = await prisma.song.update({
     where: { id },
-    data: { title: body.title },
+    data: {
+      ...(body.title !== undefined && { title: body.title }),
+      ...(body.pinned !== undefined && { pinned: body.pinned }),
+      ...(body.folderId !== undefined && { folderId: body.folderId || null }),
+      ...(body.notes !== undefined && { notes: body.notes }),
+      ...(body.lastPositionSec !== undefined && { lastPositionSec: body.lastPositionSec }),
+    },
   });
   return NextResponse.json(song);
 }
