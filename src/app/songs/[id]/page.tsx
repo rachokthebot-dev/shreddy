@@ -29,14 +29,15 @@ import {
   StickyNote,
   ChevronDown,
   ChevronUp,
-  Star,
   Clock,
   RotateCw,
   Disc3,
   Volume2,
   RefreshCw,
+  Repeat2,
 } from "lucide-react";
 import { useMetronome } from "@/hooks/useMetronome";
+import { usePitchShifter } from "@/hooks/usePitchShifter";
 
 interface Section {
   id: string;
@@ -113,6 +114,7 @@ export default function PracticePage({
   const [pitch, setPitch] = useState(0);
   const [selectedSectionIds, setSelectedSectionIds] = useState<string[]>([]);
   const [loopEnabled, setLoopEnabled] = useState(false);
+  const [loopSong, setLoopSong] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [settingsRestored, setSettingsRestored] = useState(false);
 
@@ -139,14 +141,15 @@ export default function PracticePage({
 
   // Practice session tracking (M16)
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [sessionStartTime, setSessionStartTime] = useState<number>(Date.now());
-  const [displayElapsed, setDisplayElapsed] = useState(0);
+  const sessionIdRef = useRef<string | null>(null);
+  const [activePlayTime, setActivePlayTime] = useState(0);
 
   // Metronome (M19)
   const [metronomeEnabled, setMetronomeEnabled] = useState(false);
   const [metronomeVolume, setMetronomeVolume] = useState(0.5);
   const [metronomeStandalone, setMetronomeStandalone] = useState(false);
 
+  const activePlayTimeRef = useRef(0);
   const [loopCounts, setLoopCounts] = useState<Record<string, number>>({});
   const [sectionTimes, setSectionTimes] = useState<Record<string, number>>({});
   const lastSectionRef = useRef<string | null>(null);
@@ -154,9 +157,6 @@ export default function PracticePage({
   const flushTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
-  const webAudioConnectedRef = useRef(false);
 
   // Bookmark: save position periodically
   const lastSaveRef = useRef(0);
@@ -223,28 +223,33 @@ export default function PracticePage({
   // Start practice session on mount, end on unmount
   useEffect(() => {
     if (!song || song.processingStatus !== "ready") return;
-    const startTime = Date.now();
-    setSessionStartTime(startTime);
-
     fetch("/api/practice-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ songId: id, tempo, pitch }),
     })
       .then(res => res.json())
-      .then(data => setSessionId(data.id))
+      .then(data => {
+        setSessionId(data.id);
+        sessionIdRef.current = data.id;
+      })
       .catch(() => {});
 
     return () => {
-      const durationSec = (Date.now() - startTime) / 1000;
-      // Use sendBeacon for reliable delivery on page unload
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+      const durationSec = activePlayTimeRef.current;
       const endData = JSON.stringify({
         endedAt: new Date().toISOString(),
         durationSec,
       });
-      // sessionId might not be set yet, so we use a closure trick
-      // The actual flush happens via the flushTimerRef cleanup
-      navigator.sendBeacon?.(`/api/practice-sessions/${sessionId}`, new Blob([endData], { type: "application/json" }));
+      // Use fetch with keepalive (sendBeacon only sends POST, but we need PATCH)
+      fetch(`/api/practice-sessions/${sid}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: endData,
+        keepalive: true,
+      }).catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [song?.processingStatus]);
@@ -307,13 +312,17 @@ export default function PracticePage({
     return () => clearInterval(interval);
   }, [playing, song, currentTime, loopEnabled, selectedSectionIds]);
 
-  // Session elapsed timer
+  // Session elapsed timer — only counts while playing
   useEffect(() => {
+    if (!playing) return;
     const timer = setInterval(() => {
-      setDisplayElapsed(Math.floor((Date.now() - sessionStartTime) / 1000));
+      setActivePlayTime(prev => {
+        activePlayTimeRef.current = prev + 1;
+        return prev + 1;
+      });
     }, 1000);
     return () => clearInterval(timer);
-  }, [sessionStartTime]);
+  }, [playing]);
 
   // Metronome
   const parsedBeats: number[] = (() => {
@@ -389,7 +398,13 @@ export default function PracticePage({
     });
 
     audio.addEventListener("ended", () => {
-      setPlaying(false);
+      if (loopSongRef.current || (loopEnabledRef.current && loopRangeRef.current) || abLoopRef.current) {
+        // Loop enforcement in rAF will handle restart
+        audio.currentTime = 0;
+        audio.play();
+      } else {
+        setPlaying(false);
+      }
     });
 
     return () => {
@@ -435,37 +450,51 @@ export default function PracticePage({
     return { startSec, endSec, names };
   })();
 
-  // Handle section looping
-  useEffect(() => {
-    if (!audioRef.current || !loopEnabled || !loopRange) return;
+  // Unified loop enforcement — polls at 60fps for precise looping
+  // Handles section loops, A-B loops, and whole-song looping
+  const loopRangeRef = useRef(loopRange);
+  const abLoopRef = useRef(abLoop);
+  const loopEnabledRef = useRef(loopEnabled);
+  const loopSongRef = useRef(loopSong);
+  loopRangeRef.current = loopRange;
+  abLoopRef.current = abLoop;
+  loopEnabledRef.current = loopEnabled;
+  loopSongRef.current = loopSong;
 
-    const audio = audioRef.current;
-    const { startSec, endSec } = loopRange;
-    const handleTimeUpdate = () => {
-      if (audio.currentTime >= endSec) {
-        audio.currentTime = startSec;
+  useEffect(() => {
+    if (!playing) return;
+    let rafId: number;
+
+    const check = () => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      const t = audio.currentTime;
+      const dur = audio.duration;
+
+      // A-B loop takes highest priority
+      if (abLoopRef.current) {
+        if (t >= abLoopRef.current.b) {
+          audio.currentTime = abLoopRef.current.a;
+        }
       }
+      // Section loop
+      else if (loopEnabledRef.current && loopRangeRef.current) {
+        if (t >= loopRangeRef.current.endSec) {
+          audio.currentTime = loopRangeRef.current.startSec;
+        }
+      }
+      // Whole-song loop
+      else if (loopSongRef.current && dur > 0 && t >= dur - 0.05) {
+        audio.currentTime = 0;
+        if (audio.paused) audio.play();
+      }
+
+      rafId = requestAnimationFrame(check);
     };
 
-    audio.addEventListener("timeupdate", handleTimeUpdate);
-    return () => audio.removeEventListener("timeupdate", handleTimeUpdate);
-  }, [loopEnabled, loopRange]);
-
-  // Handle A-B looping
-  useEffect(() => {
-    if (!audioRef.current || !abLoop) return;
-
-    const audio = audioRef.current;
-    const { a, b } = abLoop;
-    const handleTimeUpdate = () => {
-      if (audio.currentTime >= b) {
-        audio.currentTime = a;
-      }
-    };
-
-    audio.addEventListener("timeupdate", handleTimeUpdate);
-    return () => audio.removeEventListener("timeupdate", handleTimeUpdate);
-  }, [abLoop]);
+    rafId = requestAnimationFrame(check);
+    return () => cancelAnimationFrame(rafId);
+  }, [playing]);
 
   // Handle tempo changes
   useEffect(() => {
@@ -474,33 +503,14 @@ export default function PracticePage({
     }
   }, [tempo]);
 
-  // Handle pitch changes
-  useEffect(() => {
-    if (!audioRef.current || pitch === 0) {
-      if (webAudioConnectedRef.current && audioContextRef.current && sourceRef.current) {
-        try {
-          sourceRef.current.disconnect();
-          sourceRef.current.connect(audioContextRef.current.destination);
-        } catch { /* ignore */ }
-      }
-      if (audioRef.current) {
-        audioRef.current.preservesPitch = true;
-      }
-      return;
-    }
-
-    const audio = audioRef.current;
-    audio.preservesPitch = false;
-    const pitchRatio = Math.pow(2, pitch / 12);
-    audio.playbackRate = tempo * pitchRatio;
-
-    return () => {
-      if (audioRef.current) {
-        audioRef.current.preservesPitch = true;
-        audioRef.current.playbackRate = tempo;
-      }
-    };
-  }, [pitch, tempo]);
+  // Pitch shifting via SoundTouch (changes key without affecting duration)
+  usePitchShifter({
+    audioUrl: song?.normalizedAudioPath ? `/api/media/${song.normalizedAudioPath}` : null,
+    pitch,
+    tempo,
+    audioRef,
+    playing,
+  });
 
   function togglePlay() {
     const audio = audioRef.current;
@@ -693,18 +703,6 @@ export default function PracticePage({
     setSectionEnd(formatTime(currentTime));
   }
 
-  // Mastery rating
-  async function setMasteryRating(sectionId: string, rating: number) {
-    const currentRating = song?.sections.find(s => s.id === sectionId)?.masteryRating;
-    const newRating = currentRating === rating ? null : rating; // Toggle off if same
-    await fetch(`/api/sections/${sectionId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ masteryRating: newRating }),
-    });
-    await fetchSong();
-  }
-
   // Format practice time
   function formatPracticeTime(sec: number): string {
     if (sec < 60) return `${sec}s`;
@@ -861,80 +859,74 @@ export default function PracticePage({
                 <RefreshCw className={`size-3 ${reanalyzing ? "animate-spin" : ""}`} />
                 {reanalyzing ? "Analyzing..." : "Re-analyze"}
               </button>
+              {activePlayTime > 0 && (
+                <span className="text-[11px] text-muted-foreground/60 flex items-center gap-1 ml-auto">
+                  <Clock className="size-3" />
+                  Session: {formatPracticeTime(activePlayTime)}
+                </span>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Progress bar */}
+        {/* === LARGE WAVEFORM BAR (Cinema Transport) === */}
         {duration > 0 && song.sections.length > 0 ? (
           <div className="mb-3">
-            <div className="relative h-11 rounded-xl overflow-hidden bg-muted">
+            <div className="relative h-20 rounded-2xl overflow-hidden bg-gradient-to-b from-zinc-800 to-zinc-900 shadow-inner">
               {song.sections.map((section, idx) => {
                 const leftPct = (section.startSec / duration) * 100;
                 const widthPct = ((section.endSec - section.startSec) / duration) * 100;
                 const isSelected = selectedSectionIds.includes(section.id);
                 const isPlaying = currentTime >= section.startSec && currentTime < section.endSec;
-                const selectedColor = "bg-blue-400/60 dark:bg-blue-500/50";
-                const playingColor = isSelected
-                  ? "bg-blue-400/80 dark:bg-blue-500/70"
-                  : sectionColors[idx % sectionColors.length].replace("/40", "/60").replace("/30", "/50");
                 const abHighlight = abLoop && section.startSec < abLoop.b && section.endSec > abLoop.a;
-
                 return (
                   <div
                     key={section.id}
                     className={`absolute inset-y-0 flex items-end transition-colors ${
                       isSelected
-                        ? isPlaying ? "bg-blue-400/80 dark:bg-blue-500/70" : selectedColor
+                        ? isPlaying ? "bg-blue-400/60" : "bg-blue-400/40"
                         : abHighlight
-                        ? "bg-orange-300/70 dark:bg-orange-700/50"
+                        ? "bg-orange-400/40"
                         : isPlaying
-                        ? playingColor
-                        : sectionColors[idx % sectionColors.length]
+                        ? sectionColors[idx % sectionColors.length].replace("/40", "/60").replace("/30", "/50")
+                        : sectionColors[idx % sectionColors.length].replace("/40", "/35").replace("/30", "/30")
                     }`}
                     style={{
                       left: `${leftPct}%`,
                       width: `${widthPct}%`,
-                      borderRight: idx < song.sections.length - 1 ? "1px solid rgba(255,255,255,0.2)" : "none",
+                      borderRight: idx < song.sections.length - 1 ? "1px solid rgba(255,255,255,0.08)" : "none",
                     }}
                   >
-                    <span
-                      className={`text-[10px] leading-none px-1.5 pb-1.5 truncate w-full ${
-                        isPlaying || isSelected
-                          ? "text-foreground font-semibold"
-                          : labelColors[idx % labelColors.length] + " font-medium"
-                      }`}
-                    >
-                      {widthPct > 4 ? section.name : ""}
-                    </span>
+                    {widthPct > 6 && (
+                      <span className="text-[11px] leading-none px-2 pb-2 truncate w-full text-white/70 font-medium pointer-events-none">
+                        {section.name}
+                      </span>
+                    )}
                   </div>
                 );
               })}
-              <div
-                className="absolute inset-y-0 left-0 bg-primary/12 dark:bg-primary/8 pointer-events-none"
-                style={{ width: `${(currentTime / duration) * 100}%` }}
-              />
-              <div
-                className="absolute inset-y-0 w-0.5 bg-white dark:bg-white shadow-sm pointer-events-none z-10"
-                style={{ left: `${(currentTime / duration) * 100}%` }}
-              />
+              {/* Progress overlay */}
+              <div className="absolute inset-y-0 left-0 bg-white/5 pointer-events-none" style={{ width: `${(currentTime / duration) * 100}%` }} />
+              {/* Playhead */}
+              <div className="absolute inset-y-0 pointer-events-none z-10" style={{ left: `${(currentTime / duration) * 100}%` }}>
+                <div className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-white shadow-[0_0_6px_rgba(255,255,255,0.4)]" />
+                <div className="absolute -top-0.5 -translate-x-1/2 w-0 h-0 border-l-[5px] border-r-[5px] border-t-[7px] border-l-transparent border-r-transparent border-t-white" />
+              </div>
+              {/* Time overlays */}
+              <div className="absolute bottom-1.5 left-2.5 text-[11px] text-white/50 tabular-nums pointer-events-none">{formatTime(currentTime)}</div>
+              <div className="absolute bottom-1.5 right-2.5 text-[11px] text-white/50 tabular-nums pointer-events-none">{formatTime(duration)}</div>
+              {/* Scrubber */}
               <input
-                type="range"
-                min={0}
-                max={duration}
-                step={0.1}
-                value={currentTime}
+                type="range" min={0} max={duration} step={0.1} value={currentTime}
                 onChange={(e) => seek(parseFloat(e.target.value))}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
               />
             </div>
-            <div className="flex justify-between items-center text-xs text-muted-foreground mt-1.5 px-0.5">
-              <span className="tabular-nums">{formatTime(currentTime)}</span>
-              {currentSection && (
-                <span className="text-foreground/80 font-medium">{currentSection.name}</span>
-              )}
-              <span className="tabular-nums">{formatTime(duration)}</span>
-            </div>
+            {currentSection && (
+              <div className="text-center mt-1">
+                <span className="text-xs text-foreground/70 font-medium">{currentSection.name}</span>
+              </div>
+            )}
           </div>
         ) : (
           <div className="mb-3">
@@ -950,14 +942,7 @@ export default function PracticePage({
                   }}
                 />
               )}
-              <Slider
-                min={0}
-                max={duration || 100}
-                step={0.1}
-                value={[currentTime]}
-                onValueChange={seek}
-                className="w-full"
-              />
+              <Slider min={0} max={duration || 100} step={0.1} value={[currentTime]} onValueChange={seek} className="w-full" />
             </div>
             <div className="flex justify-between text-xs text-muted-foreground mt-1">
               <span className="tabular-nums">{formatTime(currentTime)}</span>
@@ -966,379 +951,260 @@ export default function PracticePage({
           </div>
         )}
 
-        {/* Playback controls */}
-        <div className="flex items-center justify-center gap-3">
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={jumpToStart}
-            className="size-11 active:scale-90 transition-transform"
-          >
-            <SkipBack className="size-5" />
-          </Button>
-          <button
-            className="size-16 rounded-full bg-primary text-primary-foreground flex items-center justify-center active:scale-95 transition-transform shadow-sm"
-            onClick={togglePlay}
-          >
-            {playing ? <Pause className="size-7" /> : <Play className="size-7 ml-0.5" />}
-          </button>
-          <Button
-            variant={settingAB === "a_set" ? "default" : abLoop ? "secondary" : "outline"}
-            size="icon"
-            onClick={abLoop ? clearABLoop : handleABLoop}
-            className="size-11 active:scale-90 transition-transform text-xs font-bold"
-            title={settingAB === "a_set" ? "Set point B" : abLoop ? "Clear A-B loop" : "Set A-B loop"}
-          >
-            {settingAB === "a_set" ? "B?" : "AB"}
-          </Button>
+        {/* === UNIFIED TRANSPORT BAR === */}
+        <div className="bg-card border border-border rounded-2xl p-3 mb-3">
+          <div className="flex items-center justify-between gap-2">
+            {/* Left: Tempo pills */}
+            <div className="flex items-center gap-0.5 shrink-0">
+              {TEMPO_VALUES.map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setTempo(t)}
+                  className={`px-2 py-1.5 rounded-lg text-[11px] font-medium transition-colors active:scale-95 ${
+                    tempo === t
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted"
+                  }`}
+                >
+                  {t}x
+                </button>
+              ))}
+            </div>
+
+            {/* Center: Transport controls */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setLoopSong(!loopSong)}
+                className={`size-9 rounded-full flex items-center justify-center active:scale-90 transition-all ${
+                  loopSong ? "text-primary" : "text-muted-foreground/30"
+                }`}
+                title={loopSong ? "Song will loop" : "Song will stop at end"}
+              >
+                <Repeat className="size-4" />
+              </button>
+              <Button variant="outline" size="icon" onClick={jumpToStart} className="size-9 active:scale-90">
+                <SkipBack className="size-4" />
+              </Button>
+              <button
+                className="size-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center active:scale-95 transition-transform shadow-sm"
+                onClick={togglePlay}
+              >
+                {playing ? <Pause className="size-6" /> : <Play className="size-6 ml-0.5" />}
+              </button>
+              <Button
+                variant={settingAB === "a_set" ? "default" : abLoop ? "secondary" : "outline"}
+                size="icon"
+                onClick={abLoop ? clearABLoop : handleABLoop}
+                className="size-9 active:scale-90"
+                title={settingAB === "a_set" ? "Set point B" : abLoop ? "Clear A-B loop" : "Set A-B loop"}
+              >
+                {settingAB === "a_set" ? <span className="text-[10px] font-bold">B?</span> : <Repeat2 className="size-4" />}
+              </Button>
+            </div>
+
+            {/* Right: Pitch */}
+            <div className="flex items-center gap-2 min-w-[130px] shrink-0">
+              <span className="text-[11px] text-muted-foreground whitespace-nowrap">Pitch</span>
+              <Slider min={-6} max={6} step={1} value={[pitch]} onValueChange={(v) => setPitch(Array.isArray(v) ? v[0] : v)} className="flex-1" />
+              <span className="text-[11px] text-muted-foreground tabular-nums w-6 text-right">{pitch > 0 ? `+${pitch}` : pitch}</span>
+            </div>
+          </div>
         </div>
 
         {/* Loop / A-B indicators */}
-        <div className="mt-3 space-y-2">
-          {loopEnabled && loopRange && (
-            <div className="flex items-center justify-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-950 rounded-lg">
-              <Repeat className="size-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
-              <span className="text-sm text-blue-700 dark:text-blue-300 font-medium">
-                {loopRange.names.join(" + ")} ({formatTime(loopRange.startSec)} – {formatTime(loopRange.endSec)})
-              </span>
-              <button onClick={clearLoop} className="p-1 rounded text-blue-400 hover:text-blue-600 active:scale-90 transition-all">
-                <X className="size-3.5" />
-              </button>
-            </div>
-          )}
-          {abLoop && (
-            <div className="flex items-center justify-center gap-2 px-3 py-2 bg-orange-50 dark:bg-orange-950 rounded-lg">
-              <Repeat className="size-3.5 text-orange-600 dark:text-orange-400 shrink-0" />
-              <span className="text-sm text-orange-700 dark:text-orange-300 font-medium">
-                A-B Loop: {formatTime(abLoop.a)} – {formatTime(abLoop.b)}
-              </span>
-              <button onClick={clearABLoop} className="p-1 rounded text-orange-400 hover:text-orange-600 active:scale-90 transition-all">
-                <X className="size-3.5" />
-              </button>
-            </div>
-          )}
-          {settingAB === "a_set" && !abLoop && (
-            <div className="flex items-center justify-center gap-2 px-3 py-2 bg-orange-50 dark:bg-orange-950 rounded-lg">
-              <span className="text-sm text-orange-700 dark:text-orange-300">
-                Point A set at {formatTime(abPointA)} — navigate to B and press AB
-              </span>
-              <button onClick={() => setSettingAB("idle")} className="p-1 rounded text-orange-400 hover:text-orange-600">
-                <X className="size-3.5" />
-              </button>
-            </div>
-          )}
-        </div>
+        {(loopEnabled && loopRange) || abLoop || (settingAB === "a_set" && !abLoop) ? (
+          <div className="space-y-1.5 mb-3">
+            {loopEnabled && loopRange && (
+              <div className="flex items-center justify-center gap-2 px-3 py-1.5 bg-blue-50 dark:bg-blue-950 rounded-lg">
+                <Repeat className="size-3 text-blue-500 shrink-0" />
+                <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">
+                  {loopRange.names.join(" + ")} ({formatTime(loopRange.startSec)} – {formatTime(loopRange.endSec)})
+                </span>
+                <button onClick={clearLoop} className="p-1.5 -mr-1 rounded-lg text-blue-400 hover:text-blue-600 active:scale-90 transition-all">
+                  <X className="size-4" />
+                </button>
+              </div>
+            )}
+            {abLoop && (
+              <div className="flex items-center justify-center gap-2 px-3 py-1.5 bg-orange-50 dark:bg-orange-950 rounded-lg">
+                <Repeat className="size-3 text-orange-500 shrink-0" />
+                <span className="text-xs text-orange-600 dark:text-orange-400 font-medium">
+                  A-B Loop: {formatTime(abLoop.a)} – {formatTime(abLoop.b)}
+                </span>
+                <button onClick={clearABLoop} className="p-1.5 -mr-1 rounded-lg text-orange-400 hover:text-orange-600 active:scale-90 transition-all">
+                  <X className="size-4" />
+                </button>
+              </div>
+            )}
+            {settingAB === "a_set" && !abLoop && (
+              <div className="flex items-center justify-center gap-2 px-3 py-1.5 bg-orange-50 dark:bg-orange-950 rounded-lg">
+                <span className="text-xs text-orange-600 dark:text-orange-400">
+                  Point A at {formatTime(abPointA)} — navigate to B and press A-B
+                </span>
+                <button onClick={() => setSettingAB("idle")} className="p-1.5 -mr-1 rounded-lg text-orange-400 hover:text-orange-600 active:scale-90 transition-all">
+                  <X className="size-4" />
+                </button>
+              </div>
+            )}
+          </div>
+        ) : null}
       </div>
 
-      {/* ===== BOTTOM: Two-column layout on wide screens ===== */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Left column: Controls + Notes */}
-        <div className="space-y-5">
-          {/* Tempo control */}
-          <div className="bg-card border border-border rounded-xl p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Label className="text-sm font-semibold text-foreground">
-                Tempo: {tempo}x
-              </Label>
-              {song.bpm && (
-                <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
-                  {Math.round(song.bpm * tempo)} BPM{tempo !== 1 && ` (was ${Math.round(song.bpm)})`}
-                </span>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {TEMPO_VALUES.map((t) => (
-                <Button
-                  key={t}
-                  variant={tempo === t ? "default" : "outline"}
-                  size="sm"
-                  className="text-xs min-w-[3.2rem] h-10 active:scale-95 transition-transform"
-                  onClick={() => setTempo(t)}
-                >
-                  {t}x
-                </Button>
-              ))}
-            </div>
+      {/* === HORIZONTAL SECTIONS STRIP (Option C style) === */}
+      <div className="mb-3">
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <h2 className="text-sm font-semibold text-foreground">Sections</h2>
+          <span className="text-[11px] text-muted-foreground">Tap to loop</span>
+          <Button variant="outline" size="sm" onClick={openNewSection} className="gap-1 h-7 text-xs ml-auto">
+            <Plus className="size-3" /> Add
+          </Button>
+        </div>
+        {song.sections.length === 0 ? (
+          <div className="text-center py-6">
+            <p className="text-sm text-muted-foreground">No sections yet. Add one to start looping.</p>
           </div>
-
-          {/* Pitch control */}
-          <div className="bg-card border border-border rounded-xl p-4">
-            <Label className="text-sm font-semibold text-foreground mb-3 block">
-              Pitch: {pitch > 0 ? `+${pitch}` : pitch} semitones
-            </Label>
-            <div className="flex items-center gap-3">
-              <Slider
-                min={-6}
-                max={6}
-                step={1}
-                value={[pitch]}
-                onValueChange={(v) => setPitch(Array.isArray(v) ? v[0] : v)}
-                className="flex-1"
-              />
-              <Button variant="outline" size="sm" onClick={() => setPitch(0)} className="h-10">
-                Reset
-              </Button>
-            </div>
-          </div>
-
-          {/* Metronome */}
-          <div className="bg-card border border-border rounded-xl p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <Disc3 className={`size-4 ${metronomeActive ? "animate-spin text-primary" : "text-muted-foreground"}`} />
-                <Label className="text-sm font-semibold text-foreground">
-                  Metronome
-                </Label>
-                {metronomeEnabled && baseBpm > 0 && (
-                  <span className="text-xs text-muted-foreground">
-                    {Math.round(effectiveBpm)} BPM
-                    {manualBpm && <span className="text-[10px] ml-1">(tap)</span>}
-                  </span>
-                )}
-              </div>
-              <button
-                onClick={() => setMetronomeEnabled(!metronomeEnabled)}
-                className={`relative w-11 h-6 rounded-full transition-colors ${metronomeEnabled ? "bg-primary" : "bg-muted"}`}
-              >
+        ) : (
+          <div className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1 snap-x">
+            {song.sections.map((section, idx) => {
+              const isSelected = selectedSectionIds.includes(section.id);
+              const isPlaying = currentTime >= section.startSec && currentTime < section.endSec;
+              return (
                 <div
-                  className={`absolute top-0.5 size-5 rounded-full bg-white shadow-sm transition-transform ${metronomeEnabled ? "translate-x-5.5" : "translate-x-0.5"}`}
-                />
-              </button>
-            </div>
-            {metronomeEnabled && (
-              <div className="space-y-3">
-                {/* Beat indicator */}
-                <div className="flex items-center justify-center gap-2">
-                  {[0, 1, 2, 3].map(i => (
-                    <div
-                      key={i}
-                      className={`size-3 rounded-full transition-all ${
-                        metronomeActive && currentBeat === i
-                          ? i === 0 ? "bg-primary scale-125" : "bg-primary/70 scale-110"
-                          : "bg-muted"
-                      }`}
-                    />
-                  ))}
-                </div>
-
-                {/* Volume */}
-                <div className="flex items-center gap-3">
-                  <Volume2 className="size-4 text-muted-foreground shrink-0" />
-                  <Slider
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={[metronomeVolume]}
-                    onValueChange={(v) => setMetronomeVolume(Array.isArray(v) ? v[0] : v)}
-                    className="flex-1"
-                  />
-                </div>
-
-                {/* Controls row */}
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {/* Tap tempo */}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-xs h-8 gap-1"
-                    onClick={handleTapTempo}
-                  >
-                    Tap BPM
-                  </Button>
-
-                  {/* Tap sync */}
-                  {parsedBeats.length === 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-xs h-8 gap-1"
-                      onClick={tapSync}
-                    >
-                      Sync
-                    </Button>
-                  )}
-
-                  {/* Count-in play */}
-                  {!playing && baseBpm > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-xs h-8 gap-1"
-                      onClick={handleCountInPlay}
-                    >
-                      <Play className="size-3" />
-                      Count-in
-                    </Button>
-                  )}
-
-                  {/* Standalone toggle */}
-                  <Button
-                    variant={metronomeStandalone ? "secondary" : "outline"}
-                    size="sm"
-                    className="text-xs h-8"
-                    onClick={() => setMetronomeStandalone(!metronomeStandalone)}
-                  >
-                    Solo
-                  </Button>
-
-                  {/* Reset manual BPM */}
-                  {manualBpm && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="text-xs h-8"
-                      onClick={resetManualBpm}
-                    >
-                      Reset BPM
-                    </Button>
+                  key={section.id}
+                  className={`shrink-0 snap-start w-[140px] p-3 rounded-xl border transition-all cursor-pointer active:scale-[0.97] ${
+                    isSelected
+                      ? "bg-blue-50 dark:bg-blue-950 border-blue-300 dark:border-blue-700 shadow-sm"
+                      : isPlaying
+                      ? "bg-card border-primary/30 shadow-sm"
+                      : "bg-card border-border hover:border-ring/30"
+                  }`}
+                  onClick={() => selectSection(section, false)}
+                >
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <div className={`size-2.5 rounded-full ${sectionDotColors[idx % sectionDotColors.length]} ${isPlaying ? "animate-pulse" : ""}`} />
+                    <span className="text-sm font-medium text-foreground truncate">{section.name}</span>
+                  </div>
+                  <span className="text-[11px] text-muted-foreground tabular-nums block mb-1">
+                    {formatTime(section.startSec)} – {formatTime(section.endSec)}
+                  </span>
+                  <div className="flex items-center justify-end">
+                    <div className="flex items-center gap-0">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openEditSection(section); }}
+                        className="p-1 rounded text-muted-foreground/30 hover:text-foreground"
+                      >
+                        <Pencil className="size-3" />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteSection(section.id); }}
+                        className="p-1 rounded text-muted-foreground/30 hover:text-destructive"
+                      >
+                        <Trash2 className="size-3" />
+                      </button>
+                    </div>
+                  </div>
+                  {(loopCounts[section.id] ?? 0) > 0 && (
+                    <span className="text-[10px] text-muted-foreground flex items-center gap-0.5 mt-1">
+                      <RotateCw className="size-2.5" />
+                      {loopCounts[section.id]} loops
+                    </span>
                   )}
                 </div>
-
-                {parsedBeats.length > 0 && (
-                  <p className="text-[10px] text-muted-foreground/50">
-                    Synced to {parsedBeats.length} detected beats
-                  </p>
-                )}
-              </div>
-            )}
+              );
+            })}
           </div>
+        )}
+      </div>
 
-          {/* Notes */}
-          <div className="bg-card border border-border rounded-xl p-4">
-            <button
-              onClick={() => setNotesOpen(!notesOpen)}
-              className="flex items-center gap-2 text-sm font-semibold text-foreground w-full"
-            >
-              <StickyNote className="size-4 text-muted-foreground" />
-              Notes
-              {notesDraft && !notesOpen && (
-                <span className="text-xs text-muted-foreground font-normal truncate flex-1 text-left ml-1">
-                  — {notesDraft.slice(0, 60)}
+      {/* === COMPACT BOTTOM: Metronome + Notes === */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        {/* Metronome */}
+        <div className="bg-card border border-border rounded-xl p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Disc3 className={`size-4 ${metronomeActive ? "animate-spin text-primary" : "text-muted-foreground"}`} />
+              <Label className="text-sm font-semibold text-foreground">Metronome</Label>
+              {metronomeEnabled && baseBpm > 0 && (
+                <span className="text-xs text-muted-foreground">
+                  {Math.round(effectiveBpm)} BPM
+                  {manualBpm && <span className="text-[10px] ml-1">(tap)</span>}
                 </span>
               )}
-              {notesOpen ? (
-                <ChevronUp className="size-4 text-muted-foreground ml-auto" />
-              ) : (
-                <ChevronDown className="size-4 text-muted-foreground ml-auto" />
-              )}
+            </div>
+            <button
+              onClick={() => setMetronomeEnabled(!metronomeEnabled)}
+              className={`relative w-10 h-5 rounded-full transition-colors ${metronomeEnabled ? "bg-primary" : "bg-muted"}`}
+            >
+              <div className={`absolute top-0.5 size-4 rounded-full bg-white shadow-sm transition-transform ${metronomeEnabled ? "translate-x-5" : "translate-x-0.5"}`} />
             </button>
-            {notesOpen && (
-              <textarea
-                value={notesDraft}
-                onChange={(e) => handleNotesChange(e.target.value)}
-                placeholder="Add practice notes, chord progressions, reminders..."
-                className="w-full mt-3 p-3 text-sm border border-border rounded-lg bg-background resize-y min-h-[100px] focus:outline-none focus:ring-2 focus:ring-ring/30 text-foreground placeholder:text-muted-foreground"
-              />
-            )}
           </div>
+          {metronomeEnabled && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-center gap-2">
+                {[0, 1, 2, 3].map(i => (
+                  <div
+                    key={i}
+                    className={`size-3 rounded-full transition-all ${
+                      metronomeActive && currentBeat === i
+                        ? i === 0 ? "bg-primary scale-125" : "bg-primary/70 scale-110"
+                        : "bg-muted"
+                    }`}
+                  />
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <Volume2 className="size-3.5 text-muted-foreground shrink-0" />
+                <Slider min={0} max={1} step={0.05} value={[metronomeVolume]} onValueChange={(v) => setMetronomeVolume(Array.isArray(v) ? v[0] : v)} className="flex-1" />
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Button variant="outline" size="sm" className="text-xs h-7 gap-1" onClick={handleTapTempo}>Tap BPM</Button>
+                {parsedBeats.length === 0 && (
+                  <Button variant="outline" size="sm" className="text-xs h-7" onClick={tapSync}>Sync</Button>
+                )}
+                {!playing && baseBpm > 0 && (
+                  <Button variant="outline" size="sm" className="text-xs h-7 gap-1" onClick={handleCountInPlay}>
+                    <Play className="size-3" /> Count-in
+                  </Button>
+                )}
+                <Button variant={metronomeStandalone ? "secondary" : "outline"} size="sm" className="text-xs h-7" onClick={() => setMetronomeStandalone(!metronomeStandalone)}>Solo</Button>
+                {manualBpm && (
+                  <Button variant="outline" size="sm" className="text-xs h-7" onClick={resetManualBpm}>Reset BPM</Button>
+                )}
+              </div>
+              {parsedBeats.length > 0 && (
+                <p className="text-[10px] text-muted-foreground/50">Synced to {parsedBeats.length} detected beats</p>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Right column: Sections */}
-        <div className="bg-card border border-border rounded-xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold text-foreground">Sections</h2>
-              {displayElapsed > 0 && (
-                <span className="text-[11px] text-muted-foreground flex items-center gap-1">
-                  <Clock className="size-3" />
-                  {formatPracticeTime(displayElapsed)}
-                </span>
-              )}
-            </div>
-            <Button variant="outline" size="sm" onClick={openNewSection} className="gap-1 h-9">
-              <Plus className="size-3.5" />
-              Add
-            </Button>
-          </div>
-
-          {song.sections.length === 0 ? (
-            <div className="text-center py-8">
-              <div className="inline-flex items-center justify-center size-12 rounded-full bg-muted mb-3">
-                <Plus className="size-5 text-muted-foreground" />
-              </div>
-              <p className="text-sm text-muted-foreground">
-                No sections yet. Add one to start looping.
-              </p>
-            </div>
-          ) : (
-            <ul className="space-y-1.5 max-h-[50vh] overflow-y-auto lg:max-h-[calc(100vh-420px)]">
-              {song.sections.map((section, idx) => {
-                const isSelected = selectedSectionIds.includes(section.id);
-                const isPlaying = currentTime >= section.startSec && currentTime < section.endSec;
-                return (
-                  <li
-                    key={section.id}
-                    className={`flex items-center gap-2.5 p-3 rounded-xl cursor-pointer transition-all active:scale-[0.99] ${
-                      isSelected
-                        ? "bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800"
-                        : isPlaying
-                        ? "bg-muted/80 border border-border"
-                        : "border border-transparent hover:bg-muted/50"
-                    }`}
-                    onClick={(e) => selectSection(section, e.shiftKey)}
-                  >
-                    {/* Color dot */}
-                    <div className={`size-2.5 rounded-full shrink-0 ${sectionDotColors[idx % sectionDotColors.length]}`} />
-                    <div className="flex-1 min-w-0">
-                      <span className="text-sm font-medium truncate flex items-center gap-1.5 text-foreground">
-                        {section.name}
-                        {section.autoDetected && (
-                          <Badge variant="outline" className="text-[10px] px-1 py-0 font-normal text-muted-foreground">
-                            Auto
-                          </Badge>
-                        )}
-                        {(loopCounts[section.id] ?? 0) > 0 && (
-                          <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
-                            <RotateCw className="size-2.5" />
-                            {loopCounts[section.id]}
-                          </span>
-                        )}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground tabular-nums">
-                          {formatTime(section.startSec)} – {formatTime(section.endSec)}
-                        </span>
-                        {/* Mastery stars */}
-                        <span className="flex items-center gap-px" onClick={(e) => e.stopPropagation()}>
-                          {[1, 2, 3, 4, 5].map(star => (
-                            <button
-                              key={star}
-                              onClick={(e) => { e.stopPropagation(); setMasteryRating(section.id, star); }}
-                              className="p-0 active:scale-90 transition-transform"
-                            >
-                              <Star
-                                className={`size-3 ${
-                                  section.masteryRating && star <= section.masteryRating
-                                    ? "text-yellow-400 fill-yellow-400"
-                                    : "text-muted-foreground/30"
-                                }`}
-                              />
-                            </button>
-                          ))}
-                        </span>
-                      </div>
-                    </div>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); openEditSection(section); }}
-                      className="p-2 rounded-lg text-muted-foreground/40 hover:text-foreground hover:bg-muted active:scale-90 transition-all"
-                    >
-                      <Pencil className="size-3.5" />
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); deleteSection(section.id); }}
-                      className="p-2 rounded-lg text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 active:scale-90 transition-all"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+        {/* Notes */}
+        <div className="bg-card border border-border rounded-xl p-3">
+          <button
+            onClick={() => setNotesOpen(!notesOpen)}
+            className="flex items-center gap-2 text-sm font-semibold text-foreground w-full"
+          >
+            <StickyNote className="size-4 text-muted-foreground" />
+            Notes
+            {notesDraft && !notesOpen && (
+              <span className="text-xs text-muted-foreground font-normal truncate flex-1 text-left ml-1">
+                — {notesDraft.slice(0, 60)}
+              </span>
+            )}
+            {notesOpen ? (
+              <ChevronUp className="size-4 text-muted-foreground ml-auto" />
+            ) : (
+              <ChevronDown className="size-4 text-muted-foreground ml-auto" />
+            )}
+          </button>
+          {notesOpen && (
+            <textarea
+              value={notesDraft}
+              onChange={(e) => handleNotesChange(e.target.value)}
+              placeholder="Add practice notes, chord progressions, reminders..."
+              className="w-full mt-3 p-3 text-sm border border-border rounded-lg bg-background resize-y min-h-[100px] focus:outline-none focus:ring-2 focus:ring-ring/30 text-foreground placeholder:text-muted-foreground"
+            />
           )}
-
-          <p className="text-[11px] text-muted-foreground/50 mt-3 px-1">
-            Tap to select · Tap again to add/remove
-          </p>
         </div>
       </div>
 

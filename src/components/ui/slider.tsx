@@ -44,13 +44,13 @@ function Slider({
         }}
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
       />
-      <div className="relative w-full h-1 rounded-full bg-muted">
+      <div className="relative w-full h-1.5 rounded-full bg-muted">
         <div
           className="absolute h-full rounded-full bg-primary"
           style={{ width: `${percentage}%` }}
         />
         <div
-          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 size-3 rounded-full border border-ring bg-white ring-ring/50 hover:ring-3"
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 size-5 rounded-full border-2 border-ring bg-white ring-ring/50 hover:ring-3 shadow-sm"
           style={{ left: `${percentage}%` }}
         />
       </div>
