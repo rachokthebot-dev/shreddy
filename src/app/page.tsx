@@ -137,6 +137,9 @@ export default function LibraryPage() {
   const [youtubeImporting, setYoutubeImporting] = useState(false);
   const [youtubeError, setYoutubeError] = useState<string | null>(null);
 
+  // Section analysis toggle (default off to save API usage)
+  const [analyzeSections, setAnalyzeSections] = useState(false);
+
   const fetchSongs = useCallback(async () => {
     try {
       const res = await fetch("/api/songs");
@@ -178,6 +181,7 @@ export default function LibraryPage() {
 
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("analyzeSections", String(analyzeSections));
 
     try {
       const xhr = new XMLHttpRequest();
@@ -223,7 +227,7 @@ export default function LibraryPage() {
       const res = await fetch("/api/import/youtube", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: youtubeUrl.trim() }),
+        body: JSON.stringify({ url: youtubeUrl.trim(), analyzeSections }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -482,6 +486,15 @@ export default function LibraryPage() {
             )}
           </Button>
         </div>
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={analyzeSections}
+            onChange={(e) => setAnalyzeSections(e.target.checked)}
+            className="size-3.5 rounded"
+          />
+          <span className="text-[11px] text-muted-foreground">Analyze structure</span>
+        </label>
         <input
           id="file-upload"
           type="file"
@@ -777,6 +790,16 @@ export default function LibraryPage() {
                 For personal practice use only. Max 10 min.
               </p>
             </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={analyzeSections}
+                onChange={(e) => setAnalyzeSections(e.target.checked)}
+                className="size-4 rounded"
+              />
+              <span className="text-sm">Analyze song structure</span>
+              <span className="text-[11px] text-muted-foreground">(uses AI)</span>
+            </label>
             {youtubeError && (
               <p className="text-sm text-destructive">{youtubeError}</p>
             )}

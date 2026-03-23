@@ -55,7 +55,7 @@ async function extractMetadata(filePath: string): Promise<Record<string, string>
   });
 }
 
-async function analyzeAudio(audioPath: string, songTitle: string, originalFilename: string): Promise<AnalysisResult> {
+async function analyzeAudio(audioPath: string, songTitle: string, originalFilename: string, options?: { skipSections?: boolean }): Promise<AnalysisResult> {
   return new Promise(async (resolve) => {
     // Extract ID3/metadata tags from the original or normalized file
     const tags = await extractMetadata(audioPath);
@@ -70,9 +70,12 @@ async function analyzeAudio(audioPath: string, songTitle: string, originalFilena
     infoParts.push(`Original filename: ${originalFilename}`);
     const songInfo = infoParts.join("\n");
 
+    const args = [ANALYZE_SCRIPT, audioPath, "--song-info", songInfo];
+    if (options?.skipSections) args.push("--no-sections");
+
     execFile(
       PYTHON_BIN,
-      [ANALYZE_SCRIPT, audioPath, "--song-info", songInfo],
+      args,
       {
         timeout: 120000, // 2 min timeout for analysis
         env: { ...process.env, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || "" },
@@ -109,7 +112,7 @@ async function analyzeAudio(audioPath: string, songTitle: string, originalFilena
   });
 }
 
-export async function processAudio(songId: string, inputPath: string) {
+export async function processAudio(songId: string, inputPath: string, options?: { skipSections?: boolean }) {
   const outputFilename = `${songId}.mp3`;
   const outputPath = path.join(AUDIO_DIR, outputFilename);
 
@@ -186,14 +189,14 @@ export async function processAudio(songId: string, inputPath: string) {
       );
     });
 
-    // Auto-analyze sections
+    // Analyze audio (BPM, key, beats always; sections optionally)
     await prisma.importJob.update({
       where: { songId },
-      data: { progressMessage: "Analyzing sections..." },
+      data: { progressMessage: options?.skipSections ? "Detecting BPM & key..." : "Analyzing sections..." },
     });
 
     const song = await prisma.song.findUnique({ where: { id: songId } });
-    const analysis = await analyzeAudio(outputPath, song?.title || "", song?.originalFilename || "");
+    const analysis = await analyzeAudio(outputPath, song?.title || "", song?.originalFilename || "", { skipSections: options?.skipSections });
 
     // Save BPM, key, and beat timestamps
     if (analysis.bpm || analysis.beats.length > 0 || analysis.key) {

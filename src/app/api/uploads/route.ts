@@ -10,6 +10,7 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
+    const analyzeSections = formData.get("analyzeSections") !== "false";
 
     if (!file) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
@@ -64,7 +65,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Process in background (don't await)
-    processAudio(songId, filePath);
+    processAudio(songId, filePath, { skipSections: !analyzeSections });
 
     return NextResponse.json(song, { status: 201 });
   } catch (err) {

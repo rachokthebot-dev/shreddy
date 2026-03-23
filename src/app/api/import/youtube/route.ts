@@ -36,6 +36,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const url = body.url?.trim();
+    const analyzeSections = body.analyzeSections !== false;
 
     if (!url) {
       return NextResponse.json({ error: "No URL provided" }, { status: 400 });
@@ -83,7 +84,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Download and process in background
-    downloadAndProcess(songId, url);
+    downloadAndProcess(songId, url, { skipSections: !analyzeSections });
 
     return NextResponse.json(song, { status: 201 });
   } catch (err) {

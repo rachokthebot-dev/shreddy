@@ -116,7 +116,8 @@ export async function downloadAudio(
 
 export async function downloadAndProcess(
   songId: string,
-  url: string
+  url: string,
+  options?: { skipSections?: boolean }
 ) {
   const { processAudio } = await import("./process-audio");
 
@@ -145,7 +146,7 @@ export async function downloadAndProcess(
     });
 
     // Hand off to existing processing pipeline
-    await processAudio(songId, filePath);
+    await processAudio(songId, filePath, { skipSections: options?.skipSections });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Download failed";
     await prisma.song.update({
