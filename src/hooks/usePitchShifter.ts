@@ -21,18 +21,18 @@ export function usePitchShifter({
 }: UsePitchShifterOptions) {
   const [processing, setProcessing] = useState(false);
   const [pitchedUrl, setPitchedUrl] = useState<string | null>(null);
-  const activePitchRef = useRef(0);
+  const prevPitchRef = useRef(pitch);
 
   // When pitch changes, pause and process
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    // Always pause when pitch changes
-    if (pitch !== activePitchRef.current) {
+    // Pause when pitch actually changes (not on initial mount)
+    if (pitch !== prevPitchRef.current) {
       onPause();
+      prevPitchRef.current = pitch;
     }
-    activePitchRef.current = pitch;
 
     if (pitch === 0) {
       // Restore original audio
@@ -51,20 +51,20 @@ export function usePitchShifter({
     if (!songId) return;
 
     // Request server-side pitch processing
-    let cancelled = false;
+    const controller = new AbortController();
     setProcessing(true);
 
     fetch(`/api/songs/${songId}/pitch`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ semitones: pitch }),
+      signal: controller.signal,
     })
       .then((res) => {
         if (!res.ok) throw new Error("Pitch processing failed");
         return res.json();
       })
       .then(({ filename }) => {
-        if (cancelled) return;
         const newUrl = `/api/media/${filename}`;
         setPitchedUrl(newUrl);
         setProcessing(false);
@@ -79,11 +79,11 @@ export function usePitchShifter({
           a.playbackRate = tempo;
         }
       })
-      .catch(() => {
-        if (!cancelled) setProcessing(false);
+      .catch((err) => {
+        if (err?.name !== "AbortError") setProcessing(false);
       });
 
-    return () => { cancelled = true; };
+    return () => { controller.abort(); };
   }, [pitch, songId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Update tempo on the audio element

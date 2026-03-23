@@ -493,7 +493,7 @@ export default function LibraryPage() {
             onChange={(e) => setAnalyzeSections(e.target.checked)}
             className="size-3.5 rounded"
           />
-          <span className="text-[11px] text-muted-foreground">Analyze structure</span>
+          <span className="text-[11px] text-muted-foreground">Analyze structure (AI)</span>
         </label>
         <input
           id="file-upload"
@@ -797,8 +797,7 @@ export default function LibraryPage() {
                 onChange={(e) => setAnalyzeSections(e.target.checked)}
                 className="size-4 rounded"
               />
-              <span className="text-sm">Analyze song structure</span>
-              <span className="text-[11px] text-muted-foreground">(uses AI)</span>
+              <span className="text-sm">Analyze structure <span className="text-muted-foreground">(AI)</span></span>
             </label>
             {youtubeError && (
               <p className="text-sm text-destructive">{youtubeError}</p>

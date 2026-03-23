@@ -89,6 +89,34 @@ function transposeKey(key: string, semitones: number): string {
 
 const TEMPO_VALUES = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2];
 
+// Waveform bar is always dark, so use fixed colors (no dark: variant)
+const WAVEFORM_COLORS = [
+  "bg-violet-500/40", "bg-sky-500/40", "bg-emerald-500/40", "bg-amber-500/40", "bg-rose-500/40",
+  "bg-cyan-500/40", "bg-fuchsia-500/40", "bg-lime-500/40", "bg-orange-500/40", "bg-teal-500/40",
+];
+const WAVEFORM_COLORS_ACTIVE = [
+  "bg-violet-500/60", "bg-sky-500/60", "bg-emerald-500/60", "bg-amber-500/60", "bg-rose-500/60",
+  "bg-cyan-500/60", "bg-fuchsia-500/60", "bg-lime-500/60", "bg-orange-500/60", "bg-teal-500/60",
+];
+const SECTION_COLORS = [
+  "bg-violet-400/40 dark:bg-violet-600/30", "bg-sky-400/40 dark:bg-sky-600/30",
+  "bg-emerald-400/40 dark:bg-emerald-600/30", "bg-amber-400/40 dark:bg-amber-600/30",
+  "bg-rose-400/40 dark:bg-rose-600/30", "bg-cyan-400/40 dark:bg-cyan-600/30",
+  "bg-fuchsia-400/40 dark:bg-fuchsia-600/30", "bg-lime-400/40 dark:bg-lime-600/30",
+  "bg-orange-400/40 dark:bg-orange-600/30", "bg-teal-400/40 dark:bg-teal-600/30",
+];
+const LABEL_COLORS = [
+  "text-violet-800 dark:text-violet-200", "text-sky-800 dark:text-sky-200",
+  "text-emerald-800 dark:text-emerald-200", "text-amber-800 dark:text-amber-200",
+  "text-rose-800 dark:text-rose-200", "text-cyan-800 dark:text-cyan-200",
+  "text-fuchsia-800 dark:text-fuchsia-200", "text-lime-800 dark:text-lime-200",
+  "text-orange-800 dark:text-orange-200", "text-teal-800 dark:text-teal-200",
+];
+const SECTION_DOT_COLORS = [
+  "bg-violet-400", "bg-sky-400", "bg-emerald-400", "bg-amber-400", "bg-rose-400",
+  "bg-cyan-400", "bg-fuchsia-400", "bg-lime-400", "bg-orange-400", "bg-teal-400",
+];
+
 function PracticeSkeleton() {
   return (
     <main className="flex-1 max-w-2xl mx-auto w-full px-4 py-6">
@@ -765,60 +793,6 @@ export default function PracticePage({
     );
   }
 
-  // Waveform bar is always dark, so use fixed colors (no dark: variant)
-  const waveformColors = [
-    "bg-violet-500/40",
-    "bg-sky-500/40",
-    "bg-emerald-500/40",
-    "bg-amber-500/40",
-    "bg-rose-500/40",
-    "bg-cyan-500/40",
-    "bg-fuchsia-500/40",
-    "bg-lime-500/40",
-    "bg-orange-500/40",
-    "bg-teal-500/40",
-  ];
-  const waveformColorsActive = [
-    "bg-violet-500/60",
-    "bg-sky-500/60",
-    "bg-emerald-500/60",
-    "bg-amber-500/60",
-    "bg-rose-500/60",
-    "bg-cyan-500/60",
-    "bg-fuchsia-500/60",
-    "bg-lime-500/60",
-    "bg-orange-500/60",
-    "bg-teal-500/60",
-  ];
-  const sectionColors = [
-    "bg-violet-400/40 dark:bg-violet-600/30",
-    "bg-sky-400/40 dark:bg-sky-600/30",
-    "bg-emerald-400/40 dark:bg-emerald-600/30",
-    "bg-amber-400/40 dark:bg-amber-600/30",
-    "bg-rose-400/40 dark:bg-rose-600/30",
-    "bg-cyan-400/40 dark:bg-cyan-600/30",
-    "bg-fuchsia-400/40 dark:bg-fuchsia-600/30",
-    "bg-lime-400/40 dark:bg-lime-600/30",
-    "bg-orange-400/40 dark:bg-orange-600/30",
-    "bg-teal-400/40 dark:bg-teal-600/30",
-  ];
-  const labelColors = [
-    "text-violet-800 dark:text-violet-200",
-    "text-sky-800 dark:text-sky-200",
-    "text-emerald-800 dark:text-emerald-200",
-    "text-amber-800 dark:text-amber-200",
-    "text-rose-800 dark:text-rose-200",
-    "text-cyan-800 dark:text-cyan-200",
-    "text-fuchsia-800 dark:text-fuchsia-200",
-    "text-lime-800 dark:text-lime-200",
-    "text-orange-800 dark:text-orange-200",
-    "text-teal-800 dark:text-teal-200",
-  ];
-  const sectionDotColors = [
-    "bg-violet-400", "bg-sky-400", "bg-emerald-400", "bg-amber-400", "bg-rose-400",
-    "bg-cyan-400", "bg-fuchsia-400", "bg-lime-400", "bg-orange-400", "bg-teal-400",
-  ];
-
   const currentSection = song.sections.find(
     (s) => currentTime >= s.startSec && currentTime < s.endSec
   );
@@ -928,8 +902,8 @@ export default function PracticePage({
                         : abHighlight
                         ? "bg-orange-400/40"
                         : isPlaying
-                        ? waveformColorsActive[idx % waveformColorsActive.length]
-                        : waveformColors[idx % waveformColors.length]
+                        ? WAVEFORM_COLORS_ACTIVE[idx % WAVEFORM_COLORS_ACTIVE.length]
+                        : WAVEFORM_COLORS[idx % WAVEFORM_COLORS.length]
                     }`}
                     style={{
                       left: `${leftPct}%`,
@@ -1132,7 +1106,7 @@ export default function PracticePage({
                   onClick={() => selectSection(section, false)}
                 >
                   <div className="flex items-center gap-1.5 mb-1">
-                    <div className={`size-2.5 rounded-full ${sectionDotColors[idx % sectionDotColors.length]} ${isPlaying ? "animate-pulse" : ""}`} />
+                    <div className={`size-2.5 rounded-full ${SECTION_DOT_COLORS[idx % SECTION_DOT_COLORS.length]} ${isPlaying ? "animate-pulse" : ""}`} />
                     <span className="text-sm font-medium text-foreground truncate">{section.name}</span>
                   </div>
                   <span className="text-[11px] text-muted-foreground tabular-nums block mb-1">
