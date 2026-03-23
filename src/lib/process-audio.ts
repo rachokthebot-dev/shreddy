@@ -18,6 +18,7 @@ interface AnalysisResult {
   sections: AnalyzedSection[];
   bpm: number | null;
   beats: number[];
+  key: string | null;
 }
 
 async function extractMetadata(filePath: string): Promise<Record<string, string>> {
@@ -79,28 +80,29 @@ async function analyzeAudio(audioPath: string, songTitle: string, originalFilena
       (error, stdout, stderr) => {
         if (error) {
           console.error("Analysis failed:", stderr || error.message);
-          resolve({ sections: [], bpm: null, beats: [] });
+          resolve({ sections: [], bpm: null, beats: [], key: null });
           return;
         }
         try {
           const result = JSON.parse(stdout.trim());
           if (result && typeof result === "object" && Array.isArray(result.sections)) {
-            // New format: { bpm, sections, beats }
+            // New format: { bpm, key, sections, beats }
             resolve({
               sections: result.sections,
               bpm: result.bpm ?? null,
               beats: Array.isArray(result.beats) ? result.beats : [],
+              key: result.key ?? null,
             });
           } else if (Array.isArray(result)) {
             // Legacy format: just sections array
-            resolve({ sections: result, bpm: null, beats: [] });
+            resolve({ sections: result, bpm: null, beats: [], key: null });
           } else {
             console.error("Analysis returned error:", result);
-            resolve({ sections: [], bpm: null, beats: [] });
+            resolve({ sections: [], bpm: null, beats: [], key: null });
           }
         } catch {
           console.error("Failed to parse analysis output:", stdout);
-          resolve({ sections: [], bpm: null, beats: [] });
+          resolve({ sections: [], bpm: null, beats: [], key: null });
         }
       }
     );
@@ -193,12 +195,13 @@ export async function processAudio(songId: string, inputPath: string) {
     const song = await prisma.song.findUnique({ where: { id: songId } });
     const analysis = await analyzeAudio(outputPath, song?.title || "", song?.originalFilename || "");
 
-    // Save BPM and beat timestamps
-    if (analysis.bpm || analysis.beats.length > 0) {
+    // Save BPM, key, and beat timestamps
+    if (analysis.bpm || analysis.beats.length > 0 || analysis.key) {
       await prisma.song.update({
         where: { id: songId },
         data: {
           ...(analysis.bpm && { bpm: analysis.bpm }),
+          ...(analysis.key && { musicalKey: analysis.key }),
           ...(analysis.beats.length > 0 && { beatTimestamps: JSON.stringify(analysis.beats) }),
         },
       });
@@ -262,11 +265,12 @@ export async function reanalyzeAudio(songId: string, audioPath: string) {
     const song = await prisma.song.findUnique({ where: { id: songId } });
     const analysis = await analyzeAudio(audioPath, song?.title || "", song?.originalFilename || "");
 
-    // Update BPM and beat timestamps
+    // Update BPM, key, and beat timestamps
     await prisma.song.update({
       where: { id: songId },
       data: {
         ...(analysis.bpm && { bpm: analysis.bpm }),
+        ...(analysis.key && { musicalKey: analysis.key }),
         beatTimestamps: analysis.beats.length > 0 ? JSON.stringify(analysis.beats) : null,
       },
     });

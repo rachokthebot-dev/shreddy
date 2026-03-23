@@ -56,6 +56,7 @@ interface Song {
   durationSec: number | null;
   processingStatus: string;
   bpm: number | null;
+  musicalKey: string;
   beatTimestamps: string | null;
   notes: string;
   lastPositionSec: number;
@@ -73,6 +74,17 @@ function formatTime(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+function transposeKey(key: string, semitones: number): string {
+  const match = key.match(/^([A-G]#?)\s*(Major|Minor)$/i);
+  if (!match) return key;
+  const idx = NOTE_NAMES.indexOf(match[1]);
+  if (idx === -1) return key;
+  const newIdx = ((idx + semitones) % 12 + 12) % 12;
+  return `${NOTE_NAMES[newIdx]} ${match[2]}`;
 }
 
 const TEMPO_VALUES = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2];
@@ -866,6 +878,11 @@ export default function PracticePage({
               )}
               {song.genre && (
                 <span className="text-[11px] bg-muted text-muted-foreground px-2 py-0.5 rounded-full">{song.genre}</span>
+              )}
+              {song.musicalKey && (
+                <span className="text-[11px] bg-muted text-muted-foreground px-2 py-0.5 rounded-full">
+                  {pitch !== 0 ? transposeKey(song.musicalKey, pitch) : song.musicalKey}
+                </span>
               )}
               {song.bpm && (
                 <span className="text-[11px] bg-muted text-muted-foreground px-2 py-0.5 rounded-full">{Math.round(song.bpm)} BPM</span>

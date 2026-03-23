@@ -19,6 +19,7 @@ model Song {
   errorMessage       String?
   pinned             Boolean   @default(false)
   folderId           String?
+  musicalKey         String    @default("")
   bpm                Float?
   beatTimestamps     String?   // JSON array of beat times in seconds
   notes              String    @default("")
