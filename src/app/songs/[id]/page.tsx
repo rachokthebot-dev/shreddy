@@ -497,24 +497,23 @@ export default function PracticePage({
     return () => cancelAnimationFrame(rafId);
   }, [playing, hasAnyLoop]);
 
-  useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.playbackRate = tempo;
+  const pausePlayback = useCallback(() => {
+    const audio = audioRef.current;
+    if (audio && !audio.paused) {
+      audio.pause();
+      setPlaying(false);
     }
-  }, [tempo]);
+  }, []);
 
-  // Pitch shifting via SoundTouch (changes key without affecting duration)
-  usePitchShifter({
+  const { processing: pitchProcessing } = usePitchShifter({
+    songId: song?.id ?? null,
     audioUrl: song?.normalizedAudioPath ? `/api/media/${song.normalizedAudioPath}` : null,
-    pitch,
-    tempo,
-    audioRef,
-    playing,
+    pitch, tempo, audioRef, onPause: pausePlayback,
   });
 
   function togglePlay() {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || pitchProcessing) return;
     if (playing) {
       audio.pause();
     } else {
@@ -754,7 +753,31 @@ export default function PracticePage({
     );
   }
 
-  // Section colors helper
+  // Waveform bar is always dark, so use fixed colors (no dark: variant)
+  const waveformColors = [
+    "bg-violet-500/40",
+    "bg-sky-500/40",
+    "bg-emerald-500/40",
+    "bg-amber-500/40",
+    "bg-rose-500/40",
+    "bg-cyan-500/40",
+    "bg-fuchsia-500/40",
+    "bg-lime-500/40",
+    "bg-orange-500/40",
+    "bg-teal-500/40",
+  ];
+  const waveformColorsActive = [
+    "bg-violet-500/60",
+    "bg-sky-500/60",
+    "bg-emerald-500/60",
+    "bg-amber-500/60",
+    "bg-rose-500/60",
+    "bg-cyan-500/60",
+    "bg-fuchsia-500/60",
+    "bg-lime-500/60",
+    "bg-orange-500/60",
+    "bg-teal-500/60",
+  ];
   const sectionColors = [
     "bg-violet-400/40 dark:bg-violet-600/30",
     "bg-sky-400/40 dark:bg-sky-600/30",
@@ -882,14 +905,14 @@ export default function PracticePage({
                 return (
                   <div
                     key={section.id}
-                    className={`absolute inset-y-0 flex items-end transition-colors ${
+                    className={`absolute inset-y-0 flex items-center transition-colors ${
                       isSelected
                         ? isPlaying ? "bg-blue-400/60" : "bg-blue-400/40"
                         : abHighlight
                         ? "bg-orange-400/40"
                         : isPlaying
-                        ? sectionColors[idx % sectionColors.length].replace("/40", "/60").replace("/30", "/50")
-                        : sectionColors[idx % sectionColors.length].replace("/40", "/35").replace("/30", "/30")
+                        ? waveformColorsActive[idx % waveformColorsActive.length]
+                        : waveformColors[idx % waveformColors.length]
                     }`}
                     style={{
                       left: `${leftPct}%`,
@@ -898,7 +921,7 @@ export default function PracticePage({
                     }}
                   >
                     {widthPct > 6 && (
-                      <span className="text-[11px] leading-none px-2 pb-2 truncate w-full text-white/70 font-medium pointer-events-none">
+                      <span className="text-[11px] leading-none px-2 truncate w-full text-white/80 font-medium pointer-events-none">
                         {section.name}
                       </span>
                     )}
@@ -912,9 +935,6 @@ export default function PracticePage({
                 <div className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-white shadow-[0_0_6px_rgba(255,255,255,0.4)]" />
                 <div className="absolute -top-0.5 -translate-x-1/2 w-0 h-0 border-l-[5px] border-r-[5px] border-t-[7px] border-l-transparent border-r-transparent border-t-white" />
               </div>
-              {/* Time overlays */}
-              <div className="absolute bottom-1.5 left-2.5 text-[11px] text-white/50 tabular-nums pointer-events-none">{formatTime(currentTime)}</div>
-              <div className="absolute bottom-1.5 right-2.5 text-[11px] text-white/50 tabular-nums pointer-events-none">{formatTime(duration)}</div>
               {/* Scrubber */}
               <input
                 type="range" min={0} max={duration} step={0.1} value={currentTime}
@@ -922,11 +942,11 @@ export default function PracticePage({
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
               />
             </div>
-            {currentSection && (
-              <div className="text-center mt-1">
-                <span className="text-xs text-foreground/70 font-medium">{currentSection.name}</span>
-              </div>
-            )}
+            <div className="flex justify-between items-center mt-1 px-1">
+              <span className="text-[11px] text-muted-foreground tabular-nums">{formatTime(currentTime)}</span>
+              {currentSection && <span className="text-xs text-foreground/70 font-medium">{currentSection.name}</span>}
+              <span className="text-[11px] text-muted-foreground tabular-nums">{formatTime(duration)}</span>
+            </div>
           </div>
         ) : (
           <div className="mb-3">
@@ -986,10 +1006,11 @@ export default function PracticePage({
                 <SkipBack className="size-4" />
               </Button>
               <button
-                className="size-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center active:scale-95 transition-transform shadow-sm"
+                className="size-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center active:scale-95 transition-transform shadow-sm disabled:opacity-50"
                 onClick={togglePlay}
+                disabled={pitchProcessing}
               >
-                {playing ? <Pause className="size-6" /> : <Play className="size-6 ml-0.5" />}
+                {pitchProcessing ? <Loader2 className="size-6 animate-spin" /> : playing ? <Pause className="size-6" /> : <Play className="size-6 ml-0.5" />}
               </button>
               <Button
                 variant={settingAB === "a_set" ? "default" : abLoop ? "secondary" : "outline"}
@@ -1003,10 +1024,23 @@ export default function PracticePage({
             </div>
 
             {/* Right: Pitch */}
-            <div className="flex items-center gap-2 min-w-[130px] shrink-0">
-              <span className="text-[11px] text-muted-foreground whitespace-nowrap">Pitch</span>
-              <Slider min={-6} max={6} step={1} value={[pitch]} onValueChange={(v) => setPitch(Array.isArray(v) ? v[0] : v)} className="flex-1" />
-              <span className="text-[11px] text-muted-foreground tabular-nums w-6 text-right">{pitch > 0 ? `+${pitch}` : pitch}</span>
+            <div className="flex items-center gap-1 shrink-0">
+              <span className="text-[11px] text-muted-foreground whitespace-nowrap mr-1">Pitch</span>
+              <button
+                onClick={() => setPitch(Math.max(-6, pitch - 1))}
+                disabled={pitch <= -6}
+                className="size-9 rounded-lg border border-border flex items-center justify-center text-sm font-medium active:scale-90 transition-transform disabled:opacity-30"
+              >
+                −
+              </button>
+              <span className="text-sm font-medium tabular-nums w-8 text-center">{pitch > 0 ? `+${pitch}` : pitch}</span>
+              <button
+                onClick={() => setPitch(Math.min(6, pitch + 1))}
+                disabled={pitch >= 6}
+                className="size-9 rounded-lg border border-border flex items-center justify-center text-sm font-medium active:scale-90 transition-transform disabled:opacity-30"
+              >
+                +
+              </button>
             </div>
           </div>
         </div>
