@@ -1,13 +1,13 @@
 services:
-  practicepad:
+  shreddy:
     build: .
     ports:
       - "3000:3000"
     volumes:
-      - practicepad-data:/app/data
+      - shreddy-data:/app/data
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     restart: unless-stopped
 
 volumes:
-  practicepad-data:
+  shreddy-data:

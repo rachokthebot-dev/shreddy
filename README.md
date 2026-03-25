@@ -1,4 +1,4 @@
-# PracticePad
+# Shreddy
 
 A local-first guitar practice companion web app. Upload songs or import from YouTube, get AI-powered section detection, and practice with tempo control, pitch shifting, section looping, and a built-in metronome. Optimized for iPad Safari.
 
@@ -63,12 +63,12 @@ A local-first guitar practice companion web app. Upload songs or import from You
 
 ### Option 1: Docker (recommended)
 
-The fastest way to get PracticePad running:
+The fastest way to get Shreddy running:
 
 ```bash
 # Clone the repo
-git clone https://github.com/rachokthebot-dev/practicepad.git
-cd practicepad
+git clone https://github.com/rachokthebot-dev/shreddy.git
+cd shreddy
 
 # Start with Docker Compose
 docker compose up -d
@@ -97,8 +97,8 @@ Data is persisted in a Docker volume. To stop: `docker compose down`.
 
 ```bash
 # Clone the repo
-git clone https://github.com/rachokthebot-dev/practicepad.git
-cd practicepad
+git clone https://github.com/rachokthebot-dev/shreddy.git
+cd shreddy
 
 # Set up Python environment
 python3 -m venv .venv
@@ -144,7 +144,7 @@ You can set the Anthropic API key in three ways (in priority order):
 2. **`.env` file**: Add `ANTHROPIC_API_KEY=sk-ant-...` to `app/.env`
 3. **Settings UI**: Go to Settings and enter it in the API Key field
 
-Without an API key, PracticePad still works — audio analysis falls back to local-only mode (BPM, key, and beat detection still work via librosa, but AI section detection is skipped).
+Without an API key, Shreddy still works — audio analysis falls back to local-only mode (BPM, key, and beat detection still work via librosa, but AI section detection is skipped).
 
 ### Troubleshooting
 
@@ -160,7 +160,7 @@ Without an API key, PracticePad still works — audio analysis falls back to loc
 ## Architecture
 
 ```
-practicepad/
+shreddy/
 ├── app/                    # Next.js application
 │   ├── prisma/             # Database schema & migrations
 │   ├── src/

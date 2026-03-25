@@ -442,7 +442,7 @@ export default function LibraryPage() {
     <main className="flex-1 max-w-2xl mx-auto w-full px-4 py-6">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">PracticePad</h1>
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">Shreddy</h1>
         <div className="flex items-center gap-1">
           <Link
             href="/stats"

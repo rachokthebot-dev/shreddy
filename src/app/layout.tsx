@@ -8,7 +8,7 @@ const geistSans = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "PracticePad",
+  title: "Shreddy",
   description: "Guitar practice companion",
 };
 

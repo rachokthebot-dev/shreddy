@@ -1,6 +1,6 @@
 @AGENTS.md
 
-# PracticePad
+# Shreddy
 
 Guitar practice companion web app. Local-first, accessed from iPad on local network.
 
