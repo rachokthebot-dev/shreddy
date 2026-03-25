@@ -60,6 +60,13 @@ export async function POST(
       { timeout: 120000 },
       (error, _stdout, stderr) => {
         if (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            resolve(NextResponse.json(
+              { error: "ffmpeg is not installed. Install it with: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)" },
+              { status: 500 }
+            ));
+            return;
+          }
           console.error("ffmpeg pitch shift failed:", stderr);
           resolve(NextResponse.json({ error: "Pitch processing failed" }, { status: 500 }));
           return;

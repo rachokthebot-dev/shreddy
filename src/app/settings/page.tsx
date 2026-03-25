@@ -4,7 +4,15 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { ArrowLeft, RotateCcw, Save, Loader2, Moon, Sun } from "lucide-react";
+import { ArrowLeft, RotateCcw, Save, Loader2, Moon, Sun, Key, Activity, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
+
+interface DepStatus {
+  name: string;
+  installed: boolean;
+  version?: string;
+  required: boolean;
+  installHint: string;
+}
 
 const DEFAULT_PROMPT = `You are an expert music analyst. I've extracted audio features from a song and generated these visualizations:
 
@@ -42,9 +50,14 @@ Begin your analysis:`;
 export default function SettingsPage() {
   const [prompt, setPrompt] = useState("");
   const [youtubeMaxDuration, setYoutubeMaxDuration] = useState(10); // minutes
+  const [apiKey, setApiKey] = useState("");
+  const [apiKeyDisplay, setApiKeyDisplay] = useState("");
+  const [hasEnvApiKey, setHasEnvApiKey] = useState(false);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
+  const [deps, setDeps] = useState<DepStatus[]>([]);
+  const [depsLoading, setDepsLoading] = useState(true);
 
   useEffect(() => {
     // Check current dark mode state
@@ -55,8 +68,18 @@ export default function SettingsPage() {
       .then((data) => {
         setPrompt(data.analysisPrompt || "");
         setYoutubeMaxDuration(Math.floor((data.youtubeMaxDuration || 600) / 60));
+        setApiKeyDisplay(data.anthropicApiKey || "");
+        setHasEnvApiKey(data.hasEnvApiKey || false);
         setLoading(false);
       });
+
+    fetch("/api/health")
+      .then((res) => res.json())
+      .then((data) => {
+        setDeps(data.dependencies || []);
+        setDepsLoading(false);
+      })
+      .catch(() => setDepsLoading(false));
   }, []);
 
   function toggleDarkMode() {
@@ -67,14 +90,23 @@ export default function SettingsPage() {
   }
 
   async function handleSave() {
-    await fetch("/api/settings", {
+    const body: Record<string, unknown> = {
+      analysisPrompt: prompt,
+      youtubeMaxDuration: youtubeMaxDuration * 60,
+    };
+    // Only send API key if user typed a new one (not the masked display)
+    if (apiKey) {
+      body.anthropicApiKey = apiKey;
+    }
+    const res = await fetch("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        analysisPrompt: prompt,
-        youtubeMaxDuration: youtubeMaxDuration * 60,
-      }),
+      body: JSON.stringify(body),
     });
+    const data = await res.json();
+    setApiKeyDisplay(data.anthropicApiKey || "");
+    setHasEnvApiKey(data.hasEnvApiKey || false);
+    setApiKey("");
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   }
@@ -121,6 +153,71 @@ export default function SettingsPage() {
               className={`absolute top-0.5 size-5 rounded-full bg-white shadow-sm transition-transform ${darkMode ? "translate-x-5.5" : "translate-x-0.5"}`}
             />
           </button>
+        </div>
+
+        {/* System Health */}
+        <div className="p-4 bg-card rounded-xl border border-border">
+          <div className="flex items-center gap-2 mb-3">
+            <Activity className="size-4 text-muted-foreground" />
+            <p className="text-sm font-medium text-foreground">System Dependencies</p>
+          </div>
+          {depsLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> Checking...
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {deps.map((dep) => (
+                <div key={dep.name} className="flex items-start gap-2">
+                  {dep.installed ? (
+                    <CheckCircle2 className="size-4 mt-0.5 text-green-500 shrink-0" />
+                  ) : dep.required ? (
+                    <XCircle className="size-4 mt-0.5 text-red-500 shrink-0" />
+                  ) : (
+                    <AlertTriangle className="size-4 mt-0.5 text-yellow-500 shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <span className="text-sm text-foreground">
+                      {dep.name}
+                      {dep.version && <span className="text-muted-foreground ml-1">({dep.version})</span>}
+                      {!dep.required && <span className="text-muted-foreground ml-1">(optional)</span>}
+                    </span>
+                    {!dep.installed && (
+                      <p className="text-xs text-muted-foreground mt-0.5 font-mono break-all">{dep.installHint}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* API Key */}
+        <div className="p-4 bg-card rounded-xl border border-border">
+          <div className="flex items-center gap-2 mb-2">
+            <Key className="size-4 text-muted-foreground" />
+            <p className="text-sm font-medium text-foreground">Anthropic API Key</p>
+          </div>
+          <p className="text-xs text-muted-foreground mb-3">
+            Required for AI section detection. Get one at{" "}
+            <a href="https://console.anthropic.com" target="_blank" rel="noopener" className="underline">console.anthropic.com</a>.
+            {hasEnvApiKey && " (Environment variable is set.)"}
+          </p>
+          {apiKeyDisplay && !apiKey && (
+            <p className="text-xs text-green-600 dark:text-green-400 mb-2">
+              Saved: {apiKeyDisplay}
+            </p>
+          )}
+          <input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={apiKeyDisplay ? "Enter new key to replace" : "sk-ant-..."}
+            className="w-full h-9 px-3 text-sm border border-border rounded-lg bg-background text-foreground placeholder:text-muted-foreground"
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            Stored locally in settings. You can also set ANTHROPIC_API_KEY in .env.
+          </p>
         </div>
 
         {/* YouTube import settings */}

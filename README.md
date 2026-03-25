@@ -46,6 +46,8 @@ A local-first guitar practice companion web app. Upload songs or import from You
 ![Settings](screenshots/settings.png)
 
 - **Dark / light mode**
+- **Anthropic API key** management (set in UI or via environment variable)
+- **System health check** — see which dependencies are installed and which need attention
 - **YouTube import** max duration setting
 - **Custom analysis prompt** — modify the Claude Vision prompt used for section detection
 
@@ -59,15 +61,39 @@ A local-first guitar practice companion web app. Upload songs or import from You
 
 ## Setup
 
-### Prerequisites
+### Option 1: Docker (recommended)
 
-- Node.js 20+
-- Python 3.10+ with a virtual environment
-- ffmpeg and ffprobe
-- yt-dlp (for YouTube imports)
-- An Anthropic API key (for AI section detection; falls back to local analysis without it)
+The fastest way to get PracticePad running:
 
-### Install
+```bash
+# Clone the repo
+git clone https://github.com/rachokthebot-dev/practicepad.git
+cd practicepad
+
+# Start with Docker Compose
+docker compose up -d
+
+# With an Anthropic API key for AI section detection (optional)
+ANTHROPIC_API_KEY=your_key_here docker compose up -d
+```
+
+Open `http://localhost:3000` (or `http://<your-ip>:3000` from iPad).
+
+Data is persisted in a Docker volume. To stop: `docker compose down`.
+
+### Option 2: Manual Install
+
+#### Prerequisites
+
+| Dependency | Required | Install |
+|---|---|---|
+| Node.js 20+ | Yes | [nodejs.org](https://nodejs.org) |
+| Python 3.10+ | Yes | `brew install python` (macOS) |
+| ffmpeg | Yes | `brew install ffmpeg` (macOS) or `apt install ffmpeg` (Linux) |
+| yt-dlp | Optional | `brew install yt-dlp` (macOS) or `pip install yt-dlp` |
+| Anthropic API key | Optional | [console.anthropic.com](https://console.anthropic.com) |
+
+#### Install
 
 ```bash
 # Clone the repo
@@ -86,14 +112,16 @@ npm install
 # Set up the database
 npx prisma migrate dev
 
-# Set your API key
-export ANTHROPIC_API_KEY=your_key_here
+# (Optional) Set your API key — you can also do this in the Settings UI
+cp .env.example .env
+# Edit .env and add your ANTHROPIC_API_KEY
 ```
 
-### Run
+#### Run
 
 ```bash
 # Development (local only)
+cd app
 npm run dev
 
 # Development (accessible from iPad on local network)
@@ -104,6 +132,30 @@ npm run build && npm start
 ```
 
 Access from iPad at `http://<your-mac-ip>:3000`.
+
+### Verify Setup
+
+After starting, go to **Settings** to see the **System Dependencies** section. It shows which dependencies are installed and provides install instructions for any that are missing.
+
+### API Key
+
+You can set the Anthropic API key in three ways (in priority order):
+1. **Environment variable**: `ANTHROPIC_API_KEY=sk-ant-... npm start`
+2. **`.env` file**: Add `ANTHROPIC_API_KEY=sk-ant-...` to `app/.env`
+3. **Settings UI**: Go to Settings and enter it in the API Key field
+
+Without an API key, PracticePad still works — audio analysis falls back to local-only mode (BPM, key, and beat detection still work via librosa, but AI section detection is skipped).
+
+### Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| "ffmpeg not installed" error on upload | Install ffmpeg: `brew install ffmpeg` (macOS) or `apt install ffmpeg` (Linux) |
+| "Python virtual environment not found" | Run `python3 -m venv .venv && source .venv/bin/activate && pip install librosa matplotlib scipy numpy anthropic` from the project root |
+| YouTube import fails | Install yt-dlp: `brew install yt-dlp` (macOS). Also check Settings > YouTube Max Duration |
+| Sections not detected | Set an Anthropic API key (see above). Without it, section detection is skipped |
+| Can't access from iPad | Use `--hostname 0.0.0.0` flag, or use production mode (`npm run build && npm start`). Ensure Mac and iPad are on the same network |
+| Pitch shifting slow | First pitch shift for a song takes a few seconds (ffmpeg processing). Subsequent requests for the same pitch are instant (cached) |
 
 ## Architecture
 

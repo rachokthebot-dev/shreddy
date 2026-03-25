@@ -6,6 +6,7 @@ import { SETTINGS_FILE } from "@/lib/paths";
 interface Settings {
   analysisPrompt?: string;
   youtubeMaxDuration?: number; // seconds, default 600 (10 min)
+  anthropicApiKey?: string;
 }
 
 async function readSettings(): Promise<Settings> {
@@ -24,13 +25,34 @@ async function writeSettings(settings: Settings): Promise<void> {
 
 export async function GET() {
   const settings = await readSettings();
-  return NextResponse.json(settings);
+  // Mask API key for frontend display — only show last 4 chars
+  const masked = { ...settings };
+  if (masked.anthropicApiKey) {
+    masked.anthropicApiKey = "sk-......" + masked.anthropicApiKey.slice(-4);
+  }
+  // Also indicate if env var is set
+  return NextResponse.json({
+    ...masked,
+    hasEnvApiKey: !!process.env.ANTHROPIC_API_KEY,
+  });
 }
 
 export async function PATCH(request: NextRequest) {
   const body = await request.json();
   const current = await readSettings();
+
+  // If anthropicApiKey is being set, update the env var for the running process
+  if (body.anthropicApiKey) {
+    process.env.ANTHROPIC_API_KEY = body.anthropicApiKey;
+  }
+
   const updated = { ...current, ...body };
   await writeSettings(updated);
-  return NextResponse.json(updated);
+
+  // Return masked version
+  const masked = { ...updated };
+  if (masked.anthropicApiKey) {
+    masked.anthropicApiKey = "sk-......" + masked.anthropicApiKey.slice(-4);
+  }
+  return NextResponse.json({ ...masked, hasEnvApiKey: !!process.env.ANTHROPIC_API_KEY });
 }

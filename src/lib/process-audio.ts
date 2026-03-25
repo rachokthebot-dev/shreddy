@@ -1,12 +1,49 @@
 import { execFile } from "child_process";
 import path from "path";
-import { unlink } from "fs/promises";
-import { AUDIO_DIR } from "./paths";
+import { unlink, access, readFile } from "fs/promises";
+import { AUDIO_DIR, SETTINGS_FILE } from "./paths";
 import { prisma } from "./prisma";
 
 const PROJECT_ROOT = path.resolve(process.cwd(), "..");
 const PYTHON_BIN = path.join(PROJECT_ROOT, ".venv", "bin", "python3");
 const ANALYZE_SCRIPT = path.join(PROJECT_ROOT, "scripts", "analyze.py");
+
+function checkCommandExists(cmd: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile("which", [cmd], (error) => resolve(!error));
+  });
+}
+
+async function ensureFfmpeg(): Promise<void> {
+  const exists = await checkCommandExists("ffmpeg");
+  if (!exists) {
+    throw new Error(
+      "ffmpeg is not installed. Install it with: brew install ffmpeg (macOS) or apt install ffmpeg (Linux)"
+    );
+  }
+}
+
+async function ensurePython(): Promise<void> {
+  try {
+    await access(PYTHON_BIN);
+  } catch {
+    throw new Error(
+      "Python virtual environment not found. Run: python3 -m venv .venv && source .venv/bin/activate && pip install librosa matplotlib scipy numpy anthropic"
+    );
+  }
+}
+
+async function getApiKey(): Promise<string> {
+  // Prefer env var, fall back to settings file
+  if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY;
+  try {
+    const data = await readFile(SETTINGS_FILE, "utf-8");
+    const settings = JSON.parse(data);
+    return settings.anthropicApiKey || "";
+  } catch {
+    return "";
+  }
+}
 
 interface AnalyzedSection {
   name: string;
@@ -78,7 +115,7 @@ async function analyzeAudio(audioPath: string, songTitle: string, originalFilena
       args,
       {
         timeout: 120000, // 2 min timeout for analysis
-        env: { ...process.env, ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || "" },
+        env: { ...process.env, ANTHROPIC_API_KEY: await getApiKey() },
       },
       (error, stdout, stderr) => {
         if (error) {
@@ -117,6 +154,10 @@ export async function processAudio(songId: string, inputPath: string, options?: 
   const outputPath = path.join(AUDIO_DIR, outputFilename);
 
   try {
+    // Check required dependencies before processing
+    await ensureFfmpeg();
+    await ensurePython();
+
     // Update status to processing
     await prisma.song.update({
       where: { id: songId },
