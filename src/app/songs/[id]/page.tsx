@@ -803,7 +803,7 @@ export default function PracticePage({
   if (song.year) metaParts.push(song.year);
 
   return (
-    <main className="flex-1 w-full px-4 lg:px-8 py-4 max-w-7xl mx-auto">
+    <main className="flex-1 w-full px-3 sm:px-4 lg:px-8 py-3 sm:py-4 max-w-7xl mx-auto">
       {/* ===== TOP: Header + Player (full width) ===== */}
       <div className="mb-4">
         {/* Header row: back + title + metadata */}
@@ -911,8 +911,8 @@ export default function PracticePage({
                       borderRight: idx < song.sections.length - 1 ? "1px solid rgba(255,255,255,0.08)" : "none",
                     }}
                   >
-                    {widthPct > 6 && (
-                      <span className="text-[11px] leading-none px-2 truncate w-full text-white/80 font-medium pointer-events-none">
+                    {widthPct > 4 && (
+                      <span className="text-[10px] sm:text-[11px] leading-none px-1 sm:px-2 truncate w-full text-white/80 font-medium pointer-events-none">
                         {section.name}
                       </span>
                     )}
@@ -964,14 +964,15 @@ export default function PracticePage({
 
         {/* === UNIFIED TRANSPORT BAR === */}
         <div className="bg-card border border-border rounded-2xl p-3 mb-3">
-          <div className="flex items-center justify-between gap-2">
-            {/* Left: Tempo pills */}
+          {/* Top row on phone: tempo + pitch. On md+: single row with all controls */}
+          <div className="flex items-center justify-between gap-2 mb-2 md:mb-0">
+            {/* Tempo pills */}
             <div className="flex items-center gap-0.5 shrink-0">
               {TEMPO_VALUES.map((t) => (
                 <button
                   key={t}
                   onClick={() => setTempo(t)}
-                  className={`px-2 py-1.5 rounded-lg text-[11px] font-medium transition-colors active:scale-95 ${
+                  className={`px-1.5 sm:px-2 py-1.5 rounded-lg text-[11px] font-medium transition-colors active:scale-95 ${
                     tempo === t
                       ? "bg-primary text-primary-foreground"
                       : "text-muted-foreground hover:bg-muted"
@@ -982,8 +983,8 @@ export default function PracticePage({
               ))}
             </div>
 
-            {/* Center: Transport controls */}
-            <div className="flex items-center gap-2">
+            {/* Center: Transport controls — hidden on phone, shown on md+ */}
+            <div className="hidden md:flex items-center gap-2">
               <button
                 onClick={() => setLoopSong(!loopSong)}
                 className={`size-9 rounded-full flex items-center justify-center active:scale-90 transition-all ${
@@ -1014,13 +1015,13 @@ export default function PracticePage({
               </Button>
             </div>
 
-            {/* Right: Pitch */}
+            {/* Pitch */}
             <div className="flex items-center gap-1 shrink-0">
               <span className="text-[11px] text-muted-foreground whitespace-nowrap mr-1">Pitch</span>
               <button
                 onClick={() => setPitch(Math.max(-6, pitch - 1))}
                 disabled={pitch <= -6}
-                className="size-9 rounded-lg border border-border flex items-center justify-center text-sm font-medium active:scale-90 transition-transform disabled:opacity-30"
+                className="size-8 sm:size-9 rounded-lg border border-border flex items-center justify-center text-sm font-medium active:scale-90 transition-transform disabled:opacity-30"
               >
                 −
               </button>
@@ -1028,11 +1029,43 @@ export default function PracticePage({
               <button
                 onClick={() => setPitch(Math.min(6, pitch + 1))}
                 disabled={pitch >= 6}
-                className="size-9 rounded-lg border border-border flex items-center justify-center text-sm font-medium active:scale-90 transition-transform disabled:opacity-30"
+                className="size-8 sm:size-9 rounded-lg border border-border flex items-center justify-center text-sm font-medium active:scale-90 transition-transform disabled:opacity-30"
               >
                 +
               </button>
             </div>
+          </div>
+
+          {/* Bottom row on phone: transport controls centered. Hidden on md+ (shown in row above) */}
+          <div className="flex md:hidden items-center justify-center gap-3">
+            <button
+              onClick={() => setLoopSong(!loopSong)}
+              className={`size-9 rounded-full flex items-center justify-center active:scale-90 transition-all ${
+                loopSong ? "text-primary" : "text-muted-foreground/30"
+              }`}
+              title={loopSong ? "Song will loop" : "Song will stop at end"}
+            >
+              <Repeat className="size-4" />
+            </button>
+            <Button variant="outline" size="icon" onClick={jumpToStart} className="size-9 active:scale-90">
+              <SkipBack className="size-4" />
+            </Button>
+            <button
+              className="size-14 rounded-full bg-primary text-primary-foreground flex items-center justify-center active:scale-95 transition-transform shadow-sm disabled:opacity-50"
+              onClick={togglePlay}
+              disabled={pitchProcessing}
+            >
+              {pitchProcessing ? <Loader2 className="size-6 animate-spin" /> : playing ? <Pause className="size-6" /> : <Play className="size-6 ml-0.5" />}
+            </button>
+            <Button
+              variant={settingAB === "a_set" ? "default" : abLoop ? "secondary" : "outline"}
+              size="icon"
+              onClick={abLoop ? clearABLoop : handleABLoop}
+              className="size-9 active:scale-90"
+              title={settingAB === "a_set" ? "Set point B" : abLoop ? "Clear A-B loop" : "Set A-B loop"}
+            >
+              {settingAB === "a_set" ? <span className="text-[10px] font-bold">B?</span> : <Repeat2 className="size-4" />}
+            </Button>
           </div>
         </div>
 
@@ -1096,7 +1129,7 @@ export default function PracticePage({
               return (
                 <div
                   key={section.id}
-                  className={`shrink-0 snap-start w-[140px] p-3 rounded-xl border transition-all cursor-pointer active:scale-[0.97] ${
+                  className={`shrink-0 snap-start w-[120px] sm:w-[140px] p-2.5 sm:p-3 rounded-xl border transition-all cursor-pointer active:scale-[0.97] ${
                     isSelected
                       ? "bg-blue-50 dark:bg-blue-950 border-blue-300 dark:border-blue-700 shadow-sm"
                       : isPlaying
